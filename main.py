@@ -86,6 +86,7 @@ def get_trading_signal(data, symbol):
     buy_signals = []
     sell_signals = []
     
+    # ---- 第一阶段：独立指标评分 ----
     # 买入信号
     if rsi < 30:
         buy_signals.append("RSI超卖（<30），可能反弹")
@@ -125,16 +126,26 @@ def get_trading_signal(data, symbol):
     if current_price < ma5 and ma5 < ma10 and ma10 < ma20:
         sell_signals.append("均线空头排列，趋势向下")
         sell_score += 2
-    
-    # 根据评分决定最终信号（只输出获胜方的信号）
+
+    # ---- 第二阶段：否决机制 ----
+    # RSI极端超买（>80）→ 强制否决买入信号
+    if rsi > 80 and buy_score > 0:
+        sell_signals.insert(0, f"RSI严重超买（{round(rsi,1)}），强烈建议减仓或观望")
+        sell_score += 3  # 额外加权，确保胜出
+    # RSI极端超卖（<20）→ 强制否决卖出信号
+    if rsi < 20 and sell_score > 0:
+        buy_signals.insert(0, f"RSI严重超卖（{round(rsi,1)}），强烈建议建仓或加仓")
+        buy_score += 3
+
+    # ---- 第三阶段：综合评分，决定最终信号 ----
     if buy_score > sell_score and buy_score >= 2:
         signal_type = "BUY"
         signals = buy_signals
-        confidence = "HIGH" if buy_score >= 4 else "MEDIUM"
+        confidence = "HIGH" if buy_score >= 5 else "MEDIUM"
     elif sell_score > buy_score and sell_score >= 2:
         signal_type = "SELL"
         signals = sell_signals
-        confidence = "HIGH" if sell_score >= 4 else "MEDIUM"
+        confidence = "HIGH" if sell_score >= 5 else "MEDIUM"
     else:
         signal_type = "HOLD"
         confidence = "LOW"
