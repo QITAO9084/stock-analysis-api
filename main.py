@@ -361,6 +361,90 @@ def analyze_stock(symbol: str = "AAPL", market: str = "us"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"分析股票失败: {str(e)}")
 
+@app.get("/stock/analyze2")
+def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
+    """
+    扁平化股票分析接口（专为 Coze 插件优化）
+
+    所有字段扁平返回，避免嵌套 Object/Array 导致 Coze 解析问题。
+    Coze 插件只需配置 String 和 Number 类型的输出参数。
+
+    - **symbol**: 股票代码（如 AAPL, 00700.HK）
+    - **market**: 市场（us/hk/cn）
+    """
+    if symbol == "auto" or not symbol:
+        symbol = "AAPL"
+    if market == "auto" or not market:
+        market = "us"
+
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        data = ticker.history(period="6mo")
+
+        if data.empty:
+            raise HTTPException(status_code=404, detail="未找到股票数据")
+
+        signal_data = get_trading_signal(data, symbol)
+        indicators = signal_data["indicators"]
+
+        current_price = round(data['Close'].iloc[-1], 2)
+        prev_close = round(data['Close'].iloc[-2], 2) if len(data) > 1 else current_price
+        change_percent = round((current_price - prev_close) / prev_close * 100, 2) if prev_close != 0 else 0
+
+        # 最近5个交易日K线，拼成一个字符串
+        kline_text_lines = []
+        for index, row in data.tail(5).iterrows():
+            kline_text_lines.append(
+                f"{index.strftime('%Y-%m-%d')} 开{round(row['Open'],2)} "
+                f"高{round(row['High'],2)} 低{round(row['Low'],2)} "
+                f"收{round(row['Close'],2)} 量{int(row['Volume'])}"
+            )
+
+        # 信号列表拼成一个字符串
+        signals_text = "；".join(signal_data["signals"]) if signal_data["signals"] else "无明显信号"
+
+        return {
+            # 基础信息
+            "symbol": str(symbol),
+            "name": str(info.get("longName", "N/A")),
+            "current_price": current_price,
+            "change_percent": change_percent,
+            "currency": str(info.get("currency", "USD")),
+            "market": str(market),
+            "analysis_time": datetime.now().isoformat(),
+            # 买卖信号
+            "signal": str(signal_data["signal"]),
+            "confidence": str(signal_data["confidence"]),
+            "key_signals_text": signals_text,
+            # 技术指标（全部扁平化）
+            "rsi": round(indicators["rsi"], 2),
+            "macd_value": round(indicators["macd"]["macd"], 4),
+            "macd_signal": round(indicators["macd"]["signal"], 4),
+            "macd_histogram": round(indicators["macd"]["histogram"], 4),
+            "kdj_k": round(indicators["kdj"]["k"], 2),
+            "kdj_d": round(indicators["kdj"]["d"], 2),
+            "kdj_j": round(indicators["kdj"]["j"], 2),
+            "boll_upper": round(indicators["bollinger_bands"]["upper"], 2),
+            "boll_middle": round(indicators["bollinger_bands"]["middle"], 2),
+            "boll_lower": round(indicators["bollinger_bands"]["lower"], 2),
+            "ma5": round(indicators["ma5"], 2),
+            "ma10": round(indicators["ma10"], 2),
+            "ma20": round(indicators["ma20"], 2),
+            # 股票信息（扁平化）
+            "market_cap": info.get("marketCap", 0),
+            "pe_ratio": round(info.get("trailingPE", 0), 2),
+            "week52_high": round(info.get("fiftyTwoWeekHigh", 0), 2),
+            "week52_low": round(info.get("fiftyTwoWeekLow", 0), 2),
+            "volume": info.get("volume", 0),
+            # K线（文本格式）
+            "kline_text": "\n".join(kline_text_lines),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"分析股票失败: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
