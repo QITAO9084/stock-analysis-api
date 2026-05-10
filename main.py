@@ -103,7 +103,8 @@ def get_trading_signal(data, symbol):
         if signal_type != "BUY":
             signal_type = "BUY"
     
-    if current_price > ma5 > ma10 > ma20:
+    # 修复：使用 and 连接条件
+    if current_price > ma5 and ma5 > ma10 and ma10 > ma20:
         signals.append("均线多头排列，趋势向上")
         signal_type = "BUY"
     
@@ -125,11 +126,13 @@ def get_trading_signal(data, symbol):
         if signal_type != "SELL":
             signal_type = "SELL"
     
-    if current_price < ma5 < ma10 < ma20:
+    # 修复：使用 and 连接条件
+    if current_price < ma5 and ma5 < ma10 and ma10 < ma20:
         signals.append("均线空头排列，趋势向下")
         signal_type = "SELL"
     
-    if not signals:
+    # 修复：使用 len() 判断空列表
+    if len(signals) == 0:
         signals.append("无明显买卖信号，建议观望")
     
     return {
