@@ -1,0 +1,93 @@
+{
+  "name": "stock_analysis_api",
+  "description": "美股港股买卖点分析API，提供股票基本信息、K线数据、技术指标（MA/MACD/RSI）和买卖信号分析",
+  "api": {
+    "type": "openapi",
+    "url": "http://YOUR_SERVER_IP:8000/openapi.json",
+    "headers": {}
+  },
+  "auth": {
+    "type": "none"
+  },
+  "tools": [
+    {
+      "name": "get_stock_analyze",
+      "description": "完整股票分析（一键获取基本信息+技术指标+买卖信号），Coze Agent 主要调用此接口",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "股票代码，美股如 AAPL，港股如 0700.HK"
+          },
+          "market": {
+            "type": "string",
+            "description": "市场：us / hk / auto（自动识别）",
+            "default": "auto"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "get_stock_info",
+      "description": "获取股票基本信息（当前价、涨跌幅、52周高低）",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "股票代码"
+          },
+          "market": {
+            "type": "string",
+            "default": "auto"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "get_stock_kline",
+      "description": "获取K线数据和技术指标（MA5/MA20/MA60/RSI/MACD）",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "股票代码"
+          },
+          "period": {
+            "type": "string",
+            "default": "6mo",
+            "description": "周期：1mo/3mo/6mo/1y/2y"
+          },
+          "interval": {
+            "type": "string",
+            "default": "1d",
+            "description": "K线间隔：1d/1wk/1mo"
+          }
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "get_stock_signal",
+      "description": "综合买卖信号分析（MACD金叉死叉、RSI超买超卖、均线突破）",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "股票代码"
+          },
+          "market": {
+            "type": "string",
+            "default": "auto"
+          }
+        },
+        "required": ["symbol"]
+      }
+    }
+  ]
+}
