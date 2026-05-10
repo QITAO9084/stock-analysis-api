@@ -237,7 +237,7 @@ def get_kline_data(symbol: str = "AAPL", market: str = "us", period: str = "1mo"
         raise HTTPException(status_code=500, detail=f"获取K线数据失败: {str(e)}")
 
 @app.get("/stock/signal")
-def get_trading_signal(symbol: str = "AAPL", market: str = "us"):
+def get_trading_signal_api(symbol: str = "AAPL", market: str = "us"):
     """
     获取买卖信号
     
