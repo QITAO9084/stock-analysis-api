@@ -8,8 +8,8 @@ from typing import Optional
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票买卖点分析API - V2增强版（含交叉检测、KDJ、成交量确认、趋势判断）",
-    version="2.0.0"
+    description="股票/加密货币分析API - V3（含多股对比、加密货币支持）",
+    version="3.0.0"
 )
 
 # 允许跨域
@@ -590,6 +590,203 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"分析股票失败: {str(e)}")
+
+# ==================== V3: 多股对比 & 加密货币 ====================
+
+@app.get("/stock/compare")
+def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us"):
+    """
+    多股对比分析接口（专为 Coze 插件优化，扁平化返回）
+
+    传入多个股票代码（逗号分隔），返回每只股票的核心指标对比。
+    最多支持5只股票同时对比。
+
+    - **symbols**: 股票代码，逗号分隔（如 "AAPL,MSFT,GOOG"）
+    - **market**: 市场（us/hk）
+    """
+    if market == "auto" or not market:
+        market = "us"
+
+    try:
+        symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        if len(symbol_list) > 5:
+            symbol_list = symbol_list[:5]
+        if len(symbol_list) < 2:
+            raise HTTPException(status_code=400, detail="至少需要2只股票进行对比")
+
+        results = []
+        for sym in symbol_list:
+            try:
+                ticker = yf.Ticker(sym)
+                info = ticker.info
+                data = ticker.history(period="6mo")
+
+                if data.empty:
+                    results.append({
+                        "symbol": sym,
+                        "name": sym,
+                        "status": "not_found"
+                    })
+                    continue
+
+                signal_data = get_trading_signal(data, sym)
+                indicators = signal_data["indicators"]
+
+                current_price = round(data['Close'].iloc[-1], 2)
+                prev_close = round(data['Close'].iloc[-2], 2) if len(data) > 1 else current_price
+                change_percent = round((current_price - prev_close) / prev_close * 100, 2) if prev_close != 0 else 0
+
+                results.append({
+                    "symbol": sym,
+                    "name": str(info.get("longName", sym)),
+                    "current_price": current_price,
+                    "change_percent": change_percent,
+                    "signal": str(signal_data["signal"]),
+                    "confidence": str(signal_data["confidence"]),
+                    "rsi": round(indicators["rsi"], 2),
+                    "macd_cross": str("golden" if indicators["macd"]["golden_cross"] else ("death" if indicators["macd"]["death_cross"] else "none")),
+                    "macd_histogram": round(indicators["macd"]["histogram"], 4),
+                    "kdj_k": round(indicators["kdj"]["k"], 2),
+                    "kdj_d": round(indicators["kdj"]["d"], 2),
+                    "volume_ratio": signal_data["volume_ratio"],
+                    "trend_direction": str(signal_data["trend_direction"]),
+                    "support_level": signal_data["support_level"],
+                    "resistance_level": signal_data["resistance_level"],
+                    "status": "ok"
+                })
+            except Exception as e:
+                results.append({
+                    "symbol": sym,
+                    "name": sym,
+                    "status": "error",
+                    "error": str(e)
+                })
+
+        # 计算对比维度：谁最强/最弱
+        valid_results = [r for r in results if r["status"] == "ok"]
+        summary = {}
+        if valid_results:
+            # RSI最低的（最接近超卖，可能反弹机会）
+            rsi_sorted = sorted(valid_results, key=lambda x: x["rsi"])
+            summary["rsi_lowest"] = {"symbol": rsi_sorted[0]["symbol"], "rsi": rsi_sorted[0]["rsi"]}
+            # RSI最高的（最接近超买，回调风险最大）
+            summary["rsi_highest"] = {"symbol": rsi_sorted[-1]["symbol"], "rsi": rsi_sorted[-1]["rsi"]}
+            # 涨幅最大
+            change_sorted = sorted(valid_results, key=lambda x: x["change_percent"], reverse=True)
+            summary["best_performer"] = {"symbol": change_sorted[0]["symbol"], "change": change_sorted[0]["change_percent"]}
+            # 跌幅最大
+            summary["worst_performer"] = {"symbol": change_sorted[-1]["symbol"], "change": change_sorted[-1]["change_percent"]}
+
+        return {
+            "market": market,
+            "total": len(results),
+            "success": len(valid_results),
+            "summary": summary,
+            "stocks": results,
+            "analysis_time": datetime.now().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"多股对比失败: {str(e)}")
+
+
+@app.get("/crypto/analyze")
+def analyze_crypto(symbol: str = "BTC-USD"):
+    """
+    加密货币分析接口（扁平化，适配 Coze 插件）
+
+    复用现有技术指标计算逻辑，支持比特币、以太坊等主流加密货币。
+    yfinance 格式：BTC-USD, ETH-USD, BNB-USD 等。
+
+    - **symbol**: 加密货币代码（如 BTC-USD, ETH-USD）
+    """
+    if not symbol:
+        symbol = "BTC-USD"
+    # 自动补全 -USD 后缀
+    symbol_upper = symbol.upper()
+    if not symbol_upper.endswith("-USD"):
+        symbol = symbol_upper + "-USD"
+
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        data = ticker.history(period="6mo")
+
+        if data.empty:
+            raise HTTPException(status_code=404, detail=f"未找到加密货币数据: {symbol}")
+
+        signal_data = get_trading_signal(data, symbol)
+        indicators = signal_data["indicators"]
+
+        current_price = round(data['Close'].iloc[-1], 2)
+        prev_close = round(data['Close'].iloc[-2], 2) if len(data) > 1 else current_price
+        change_percent = round((current_price - prev_close) / prev_close * 100, 2) if prev_close != 0 else 0
+
+        # 最近5个交易日K线
+        kline_text_lines = []
+        for index, row in data.tail(5).iterrows():
+            kline_text_lines.append(
+                f"{index.strftime('%Y-%m-%d')} 开{round(row['Open'],2)} "
+                f"高{round(row['High'],2)} 低{round(row['Low'],2)} "
+                f"收{round(row['Close'],2)} 量{int(row['Volume'])}"
+            )
+
+        signals_text = "；".join(signal_data["signals"]) if signal_data["signals"] else "无明显信号"
+
+        # 提取币种简称
+        coin_name = symbol.replace("-USD", "")
+
+        return {
+            # 基础信息
+            "symbol": str(coin_name),
+            "name": str(info.get("shortName", coin_name)),
+            "current_price": current_price,
+            "change_percent": change_percent,
+            "currency": "USD",
+            "asset_type": "crypto",
+            "analysis_time": datetime.now().isoformat(),
+            # 买卖信号
+            "signal": str(signal_data["signal"]),
+            "confidence": str(signal_data["confidence"]),
+            "key_signals_text": signals_text,
+            # 技术指标（扁平化）
+            "rsi": round(indicators["rsi"], 2),
+            "rsi_prev": round(indicators["rsi_prev"], 2),
+            "rsi_delta": indicators["rsi_delta"],
+            "macd_value": round(indicators["macd"]["macd"], 4),
+            "macd_signal": round(indicators["macd"]["signal"], 4),
+            "macd_histogram": round(indicators["macd"]["histogram"], 4),
+            "macd_cross": str("golden" if indicators["macd"]["golden_cross"] else ("death" if indicators["macd"]["death_cross"] else "none")),
+            "kdj_k": round(indicators["kdj"]["k"], 2),
+            "kdj_d": round(indicators["kdj"]["d"], 2),
+            "kdj_j": round(indicators["kdj"]["j"], 2),
+            "boll_upper": round(indicators["bollinger_bands"]["upper"], 2),
+            "boll_middle": round(indicators["bollinger_bands"]["middle"], 2),
+            "boll_lower": round(indicators["bollinger_bands"]["lower"], 2),
+            "ma5": round(indicators["ma5"], 2),
+            "ma10": round(indicators["ma10"], 2),
+            "ma20": round(indicators["ma20"], 2),
+            "ma50": round(indicators["ma50"], 2) if indicators["ma50"] else 0,
+            # 市场信息
+            "market_cap": info.get("marketCap", 0),
+            "volume_24h": info.get("volume", 0),
+            # 成交量、趋势、支撑阻力
+            "volume_signal": str(signal_data["volume_signal"]),
+            "volume_ratio": signal_data["volume_ratio"],
+            "trend_direction": str(signal_data["trend_direction"]),
+            "support_level": signal_data["support_level"],
+            "resistance_level": signal_data["resistance_level"],
+            # K线（文本格式）
+            "kline_text": "\n".join(kline_text_lines),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"加密货币分析失败: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn
