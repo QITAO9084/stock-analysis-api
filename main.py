@@ -788,6 +788,140 @@ def analyze_crypto(symbol: str = "BTC-USD"):
         raise HTTPException(status_code=500, detail=f"加密货币分析失败: {str(e)}")
 
 
+# ==================== V4: 汇率分析 ====================
+
+# 支持的汇率对映射（用户友好名称 → yfinance 代码）
+FOREX_PAIRS = {
+    "USDCNY": "CNY=X",       # 美元/人民币
+    "USDJPY": "JPY=X",       # 美元/日元
+    "USDEUR": "EURUSD=X",    # 美元/欧元（反向报价）
+    "USDGBP": "GBPUSD=X",    # 美元/英镑（反向报价）
+    "USDKRW": "KRW=X",       # 美元/韩元
+    "USDHKD": "HKD=X",       # 美元/港币
+    "USDSGD": "SGD=X",       # 美元/新加坡元
+    "USDTWD": "TWD=X",       # 美元/新台币
+    "USDINR": "INR=X",       # 美元/印度卢比
+}
+
+FOREX_NAMES = {
+    "CNY=X": "美元/人民币",
+    "JPY=X": "美元/日元",
+    "EURUSD=X": "欧元/美元",
+    "GBPUSD=X": "英镑/美元",
+    "KRW=X": "美元/韩元",
+    "HKD=X": "美元/港币",
+    "SGD=X": "美元/新加坡元",
+    "TWD=X": "美元/新台币",
+    "INR=X": "美元/印度卢比",
+}
+
+# 反向报价的货币对（1欧元=?美元，而不是1美元=?欧元）
+REVERSED_PAIRS = {"EURUSD=X", "GBPUSD=X"}
+
+
+@app.get("/forex/analyze")
+def analyze_forex(pair: str = "USDCNY"):
+    """
+    汇率技术分析接口（扁平化，适配 Coze 插件）
+
+    支持主流汇率对的技术分析，复用现有技术指标计算逻辑。
+    yfinance 数据源，每日更新。
+
+    - **pair**: 汇率对代码，如 USDCNY、USDJPY、USDEUR、USDGBP、USDKRW、USDHKD
+    """
+    pair_upper = pair.upper().strip()
+
+    # 查找 yfinance 代码
+    yf_symbol = FOREX_PAIRS.get(pair_upper)
+    if not yf_symbol:
+        # 尝试直接作为 yfinance 代码使用
+        yf_symbol = pair_upper
+
+    try:
+        ticker = yf.Ticker(yf_symbol)
+        data = ticker.history(period="6mo")
+
+        if data.empty:
+            raise HTTPException(status_code=404, detail=f"未找到汇率数据: {pair}（yfinance代码: {yf_symbol}）")
+
+        # 复用技术指标计算
+        signal_data = get_trading_signal(data, pair)
+        indicators = signal_data["indicators"]
+
+        current_price = round(data['Close'].iloc[-1], 4)
+        prev_close = round(data['Close'].iloc[-2], 4) if len(data) > 1 else current_price
+        change_percent = round((current_price - prev_close) / prev_close * 100, 4) if prev_close != 0 else 0
+
+        # 最近5个交易日K线
+        kline_text_lines = []
+        for index, row in data.tail(5).iterrows():
+            kline_text_lines.append(
+                f"{index.strftime('%Y-%m-%d')} 开{round(row['Open'],4)} "
+                f"高{round(row['High'],4)} 低{round(row['Low'],4)} "
+                f"收{round(row['Close'],4)} 量{int(row['Volume'])}"
+            )
+
+        signals_text = "；".join(signal_data["signals"]) if signal_data["signals"] else "无明显信号"
+
+        # 获取汇率对中文名称
+        pair_name = FOREX_NAMES.get(yf_symbol, pair)
+
+        # 计算近期波动率（20日标准差/均值）
+        returns = data['Close'].pct_change().dropna()
+        volatility_20d = round(returns.tail(20).std() * 100, 2) if len(returns) >= 20 else 0
+
+        # 计算N日最高最低（支撑阻力参考）
+        recent_high = round(data['High'].tail(20).max(), 4)
+        recent_low = round(data['Low'].tail(20).min(), 4)
+
+        return {
+            # 基础信息
+            "pair": str(pair_upper),
+            "name": str(pair_name),
+            "current_price": current_price,
+            "change_percent": change_percent,
+            "volatility_20d": volatility_20d,
+            "is_reversed": yf_symbol in REVERSED_PAIRS,
+            "asset_type": "forex",
+            "analysis_time": datetime.now().isoformat(),
+            # 买卖信号
+            "signal": str(signal_data["signal"]),
+            "confidence": str(signal_data["confidence"]),
+            "key_signals_text": signals_text,
+            # 技术指标（全部扁平化）
+            "rsi": round(indicators["rsi"], 2),
+            "rsi_prev": round(indicators["rsi_prev"], 2),
+            "rsi_delta": indicators["rsi_delta"],
+            "macd_value": round(indicators["macd"]["macd"], 4),
+            "macd_signal": round(indicators["macd"]["signal"], 4),
+            "macd_histogram": round(indicators["macd"]["histogram"], 4),
+            "macd_cross": str("golden" if indicators["macd"]["golden_cross"] else ("death" if indicators["macd"]["death_cross"] else "none")),
+            "kdj_k": round(indicators["kdj"]["k"], 2),
+            "kdj_d": round(indicators["kdj"]["d"], 2),
+            "kdj_j": round(indicators["kdj"]["j"], 2),
+            "boll_upper": round(indicators["bollinger_bands"]["upper"], 4),
+            "boll_middle": round(indicators["bollinger_bands"]["middle"], 4),
+            "boll_lower": round(indicators["bollinger_bands"]["lower"], 4),
+            "ma5": round(indicators["ma5"], 4),
+            "ma10": round(indicators["ma10"], 4),
+            "ma20": round(indicators["ma20"], 4),
+            "ma50": round(indicators["ma50"], 4) if indicators["ma50"] else 0,
+            # 成交量、趋势、支撑阻力
+            "volume_signal": str(signal_data["volume_signal"]),
+            "volume_ratio": signal_data["volume_ratio"],
+            "trend_direction": str(signal_data["trend_direction"]),
+            "support_level": recent_low,
+            "resistance_level": recent_high,
+            # K线（文本格式）
+            "kline_text": "\n".join(kline_text_lines),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"汇率分析失败: {str(e)}")
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

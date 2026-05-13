@@ -201,6 +201,55 @@
           }
         }
       }
+    },
+    "/forex/analyze": {
+      "get": {
+        "summary": "汇率技术分析（支持USDCNY、USDJPY等）",
+        "description": "分析主流汇率对的技术指标（RSI/MACD/KDJ/布林带/均线），返回扁平化数据适配Coze插件",
+        "operationId": "forexAnalyze",
+        "parameters": [
+          {
+            "name": "pair",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "汇率对代码，如 USDCNY、USDJPY、USDEUR、USDGBP、USDKRW、USDHKD",
+              "default": "USDCNY"
+            },
+            "description": "汇率对代码，如 USDCNY、USDJPY、USDEUR、USDGBP、USDKRW、USDHKD"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回汇率分析报告",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pair": {"type": "string", "description": "汇率对代码"},
+                    "name": {"type": "string", "description": "汇率对中文名"},
+                    "current_price": {"type": "number", "description": "当前汇率"},
+                    "change_percent": {"type": "number", "description": "涨跌幅%"},
+                    "volatility_20d": {"type": "number", "description": "20日波动率%"},
+                    "signal": {"type": "string", "description": "BUY/SELL/HOLD"},
+                    "confidence": {"type": "string", "description": "HIGH/MEDIUM/LOW"},
+                    "rsi": {"type": "number"},
+                    "rsi_prev": {"type": "number"},
+                    "macd_histogram": {"type": "number"},
+                    "kdj_k": {"type": "number"},
+                    "kdj_d": {"type": "number"},
+                    "trend_direction": {"type": "string"},
+                    "key_signals_text": {"type": "string"},
+                    "kline_text": {"type": "string"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
