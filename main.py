@@ -331,11 +331,13 @@ def get_stock_info(symbol: str = "AAPL", market: str = "us"):
         symbol = "AAPL"
     if market == "auto" or not market:
         market = "us"
-    
+
+    symbol, market = normalize_stock_symbol(symbol, market)
+
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
-        
+
         return {
             "symbol": symbol,
             "name": info.get("longName", "N/A"),
@@ -365,11 +367,13 @@ def get_kline_data(symbol: str = "AAPL", market: str = "us", period: str = "1mo"
         symbol = "AAPL"
     if market == "auto" or not market:
         market = "us"
-    
+
+    symbol, market = normalize_stock_symbol(symbol, market)
+
     try:
         ticker = yf.Ticker(symbol)
         data = ticker.history(period=period)
-        
+
         if data.empty:
             raise HTTPException(status_code=404, detail="未找到股票数据")
         
@@ -405,7 +409,9 @@ def get_trading_signal_api(symbol: str = "AAPL", market: str = "us"):
         symbol = "AAPL"
     if market == "auto" or not market:
         market = "us"
-    
+
+    symbol, market = normalize_stock_symbol(symbol, market)
+
     try:
         ticker = yf.Ticker(symbol)
         data = ticker.history(period="3mo")
@@ -433,6 +439,8 @@ def analyze_stock(symbol: str = "AAPL", market: str = "us"):
         symbol = "AAPL"
     if market == "auto" or not market:
         market = "us"
+
+    symbol, market = normalize_stock_symbol(symbol, market)
 
     try:
         ticker = yf.Ticker(symbol)
@@ -512,6 +520,8 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
         symbol = "AAPL"
     if market == "auto" or not market:
         market = "us"
+
+    symbol, market = normalize_stock_symbol(symbol, market)
 
     try:
         ticker = yf.Ticker(symbol)
@@ -613,6 +623,9 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us"):
             symbol_list = symbol_list[:5]
         if len(symbol_list) < 2:
             raise HTTPException(status_code=400, detail="至少需要2只股票进行对比")
+
+        # 标准化股票代码
+        symbol_list = [normalize_stock_symbol(s, market)[0] for s in symbol_list]
 
         results = []
         for sym in symbol_list:
@@ -920,6 +933,38 @@ def analyze_forex(pair: str = "USDCNY"):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"汇率分析失败: {str(e)}")
+
+
+def normalize_stock_symbol(symbol: str, market: str = "us") -> tuple:
+    """
+    标准化股票代码，自动补全市场后缀
+
+    - 港股(hk)：纯数字代码自动补 .HK（如 0700 → 0700.HK, 00700 → 00700.HK）
+    - 美股(us)：不做处理（yfinance 直接支持）
+    - A股(cn)：补 .SS（上交所）或 .SZ（深交所），暂不自动区分
+    - 已有后缀的代码直接返回
+
+    returns: (normalized_symbol, detected_market)
+    """
+    sym = symbol.strip().upper()
+
+    # 已有后缀，直接返回
+    if sym.endswith(".HK") or sym.endswith(".SS") or sym.endswith(".SZ"):
+        detected = "hk" if sym.endswith(".HK") else "cn"
+        return sym, detected
+
+    # 港股：纯数字（3-5位）→ 补 .HK
+    if market.lower() == "hk" or (sym.isdigit() and 3 <= len(sym) <= 5):
+        return f"{sym}.HK", "hk"
+
+    # A股：6开头上交所(.SS)，0/3开头深交所(.SZ)
+    if market.lower() == "cn" and len(sym) == 6 and sym.isdigit():
+        if sym.startswith("6"):
+            return f"{sym}.SS", "cn"
+        elif sym.startswith("0") or sym.startswith("3"):
+            return f"{sym}.SZ", "cn"
+
+    return sym, market.lower()
 
 
 if __name__ == "__main__":
