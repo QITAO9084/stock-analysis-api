@@ -532,6 +532,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             raise HTTPException(status_code=404, detail="未找到股票数据")
 
         signal_data = get_trading_signal(data, symbol)
+        trade_points = detect_trade_points(data, symbol)
         indicators = signal_data["indicators"]
 
         current_price = round(data['Close'].iloc[-1], 2)
@@ -550,6 +551,17 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
         # 信号列表拼成一个字符串
         signals_text = "；".join(signal_data["signals"]) if signal_data["signals"] else "无明显信号"
 
+        # 买卖点文字
+        trade_point_cn = {
+            "strong_buy": "强烈买入",
+            "buy": "建议买入",
+            "sell": "建议卖出",
+            "strong_sell": "强烈卖出",
+            "hold": "观望等待"
+        }
+        buy_reasons_text = "；".join(trade_points["buy_reasons"]) if trade_points["buy_reasons"] else ""
+        sell_reasons_text = "；".join(trade_points["sell_reasons"]) if trade_points["sell_reasons"] else ""
+
         return {
             # 基础信息
             "symbol": str(symbol),
@@ -563,6 +575,15 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             "signal": str(signal_data["signal"]),
             "confidence": str(signal_data["confidence"]),
             "key_signals_text": signals_text,
+            # 买卖点（V5新增）
+            "trade_point": str(trade_points["trade_point"]),
+            "trade_point_cn": trade_point_cn.get(trade_points["trade_point"], "观望"),
+            "trade_score": trade_points["score"],
+            "buy_reasons_text": buy_reasons_text,
+            "sell_reasons_text": sell_reasons_text,
+            "entry_price": trade_points["entry_price"],
+            "stop_loss": trade_points["stop_loss"],
+            "take_profit": trade_points["take_profit"],
             # 技术指标（全部扁平化）
             "rsi": round(indicators["rsi"], 2),
             "rsi_prev": round(indicators["rsi_prev"], 2),
@@ -935,6 +956,201 @@ def analyze_forex(pair: str = "USDCNY"):
         raise HTTPException(status_code=500, detail=f"汇率分析失败: {str(e)}")
 
 
+def detect_trade_points(data, symbol):
+    """
+    精准买卖点检测（V5新增）
+
+    在 get_trading_signal 基础上，组合多个指标识别高胜率买卖时机。
+
+    买入点识别规则（需满足2个及以上条件才算 strong_buy）：
+    1. MACD 金叉（DIF上穿DEA）
+    2. RSI 从超卖区回升（前日<30，今日≥30）
+    3. KDJ 超卖金叉（J<0 且 K上穿D）
+    4. 放量上涨（量比>1.5 + 阳线）
+    5. 价格触及布林带下轨后反弹（今日收>开）
+    6. 均线多头排列 + 价格回踩MA20支撑
+
+    卖出点识别规则（需满足2个及以上条件才算 strong_sell）：
+    1. MACD 死叉（DIF下穿DEA）
+    2. RSI 从超买区回落（前日>70，今日≤70）
+    3. KDJ 超买卖叉（J>100 且 K下穿D）
+    4. 放量下跌（量比>1.5 + 阴线）
+    5. 价格触及布林带上轨后回落（今日收<开）
+    6. 均线空头排列 + 价格反弹至MA20阻力
+
+    返回：
+    - trade_point: strong_buy / buy / sell / strong_sell / hold
+    - buy_reasons: 买入理由列表
+    - sell_reasons: 卖出理由列表
+    - entry_price: 建议入场价（买入点）
+    - stop_loss: 建议止损价
+    - take_profit: 建议止盈价
+    - score: 综合评分 (-10 ~ +10)
+    """
+    current_price = data['Close'].iloc[-1]
+    prev_close = data['Close'].iloc[-2] if len(data) > 1 else current_price
+    is_green = current_price > data['Open'].iloc[-1] if len(data) > 1 else True
+
+    rsi, rsi_prev, rsi_delta = calculate_rsi(data)
+    macd_data = calculate_macd(data)
+    kdj_data = calculate_kdj(data)
+    boll = calculate_bollinger_bands(data)
+    vol_status, vol_ratio = calculate_volume_signal(data)
+
+    ma5 = data['Close'].rolling(window=5).mean().iloc[-1]
+    ma10 = data['Close'].rolling(window=10).mean().iloc[-1]
+    ma20 = data['Close'].rolling(window=20).mean().iloc[-1]
+    ma50 = data['Close'].rolling(window=50).mean().iloc[-1] if len(data) >= 50 else None
+
+    buy_reasons = []
+    sell_reasons = []
+    buy_count = 0
+    sell_count = 0
+
+    # ========== 买入点检测 ==========
+
+    # 1. MACD 金叉
+    if macd_data['golden_cross']:
+        buy_reasons.append(f"MACD金叉确认（DIF={round(macd_data['macd'],4)}，DEA={round(macd_data['signal'],4)}）")
+        buy_count += 1
+
+    # 2. RSI 从超卖区回升
+    if rsi_prev < 30 and rsi >= 30:
+        buy_reasons.append(f"RSI脱离超卖区（{round(rsi_prev,1)}→{round(rsi,1)}），反转信号")
+        buy_count += 1
+    elif rsi < 20:
+        buy_reasons.append(f"RSI极度超卖（{round(rsi,1)}），超跌反弹概率大")
+        buy_count += 1
+
+    # 3. KDJ 超卖金叉（J<0 区间 K上穿D）
+    k, d, j = kdj_data['k'], kdj_data['d'], kdj_data['j']
+    if len(data) >= 3:
+        # 计算前一日 KDJ
+        prev_rsv = (data['Close'].iloc[-3] - data['Low'].iloc[-12:-3].min()) / \
+                   (data['High'].iloc[-12:-3].max() - data['Low'].iloc[-12:-3].min()) * 100 \
+                   if len(data) >= 12 else 50
+        prev_k_val = (prev_rsv + 2 * k) / 3  # 近似
+        kdj_golden = (prev_k_val < d and k >= d)  # K 从下穿越 D
+    else:
+        kdj_golden = False
+
+    if j < 0 and kdj_golden:
+        buy_reasons.append(f"KDJ超卖区金叉（K={k}，D={d}，J={round(j,1)}）")
+        buy_count += 1
+    elif j < 0:
+        buy_reasons.append(f"KDJ的J值深度超卖（{round(j,1)}），反弹在即")
+        buy_count += 0.5
+
+    # 4. 放量上涨
+    if vol_status in ("high_volume", "above_avg") and is_green:
+        buy_reasons.append(f"放量上涨（量比{vol_ratio}倍），资金进场确认")
+        buy_count += 1
+
+    # 5. 触及布林带下轨后反弹
+    prev_low = data['Low'].iloc[-2] if len(data) > 1 else current_price
+    if prev_low <= boll['lower'] and is_green:
+        buy_reasons.append(f"触及布林带下轨（{round(boll['lower'],2)}）后反弹，支撑有效")
+        buy_count += 1
+    elif current_price <= boll['lower'] * 1.01 and is_green:
+        buy_reasons.append(f"接近布林带下轨后反弹，支撑区企稳")
+        buy_count += 0.5
+
+    # 6. 均线多头 + 回踩MA20
+    ma_bullish = current_price > ma5 and ma5 > ma10 and ma10 > ma20
+    if ma_bullish and prev_close <= ma20 and current_price > ma20:
+        buy_reasons.append(f"多头趋势回踩MA20（{round(ma20,2)}）支撑后企稳")
+        buy_count += 1
+
+    # ========== 卖出点检测 ==========
+
+    # 1. MACD 死叉
+    if macd_data['death_cross']:
+        sell_reasons.append(f"MACD死叉确认（DIF={round(macd_data['macd'],4)}，DEA={round(macd_data['signal'],4)}）")
+        sell_count += 1
+
+    # 2. RSI 从超买区回落
+    if rsi_prev > 70 and rsi <= 70:
+        sell_reasons.append(f"RSI脱离超买区（{round(rsi_prev,1)}→{round(rsi,1)}），见顶信号")
+        sell_count += 1
+    elif rsi > 85:
+        sell_reasons.append(f"RSI极度超买（{round(rsi,1)}），随时可能回调")
+        sell_count += 1
+
+    # 3. KDJ 超买卖叉（J>100 区间 K下穿D）
+    if j > 100 and not kdj_golden and k < d:
+        sell_reasons.append(f"KDJ超买区死叉（K={k}，D={d}，J={round(j,1)}）")
+        sell_count += 1
+    elif j > 100:
+        sell_reasons.append(f"KDJ的J值深度超买（{round(j,1)}），短期风险极大")
+        sell_count += 0.5
+
+    # 4. 放量下跌
+    if vol_status in ("high_volume", "above_avg") and not is_green:
+        sell_reasons.append(f"放量下跌（量比{vol_ratio}倍），资金出逃确认")
+        sell_count += 1
+
+    # 5. 触及布林带上轨后回落
+    prev_high = data['High'].iloc[-2] if len(data) > 1 else current_price
+    if prev_high >= boll['upper'] and not is_green:
+        sell_reasons.append(f"触及布林带上轨（{round(boll['upper'],2)}）后回落，压力有效")
+        sell_count += 1
+    elif current_price >= boll['upper'] * 0.99 and not is_green:
+        sell_reasons.append(f"接近布林带上轨后回落，压力区受阻")
+        sell_count += 0.5
+
+    # 6. 均线空头 + 反弹至MA20
+    ma_bearish = current_price < ma5 and ma5 < ma10 and ma10 < ma20
+    if ma_bearish and prev_close >= ma20 and current_price < ma20:
+        sell_reasons.append(f"空头趋势反弹至MA20（{round(ma20,2)}）后继续下跌")
+        sell_count += 1
+
+    # ========== 综合判断 ==========
+
+    # 评分：买入+卖出互相抵消
+    score = round((buy_count - sell_count) * 2, 1)
+
+    if buy_count >= 2 and sell_count == 0:
+        trade_point = "strong_buy"
+    elif buy_count >= 1.5 and buy_count > sell_count:
+        trade_point = "buy"
+    elif sell_count >= 2 and buy_count == 0:
+        trade_point = "strong_sell"
+    elif sell_count >= 1.5 and sell_count > buy_count:
+        trade_point = "sell"
+    else:
+        trade_point = "hold"
+
+    # 建议价格（基于近期高低点）
+    recent_low = data['Low'].tail(20).min()
+    recent_high = data['High'].tail(20).max()
+    atr = (data['High'].tail(14).max() - data['Low'].tail(14).min()) / 14  # 简化ATR
+
+    if trade_point in ("strong_buy", "buy"):
+        entry_price = round(current_price * 0.995, 2)   # 稍低于当前价
+        stop_loss = round(recent_low * 0.98, 2)          # 近期低点下方2%
+        take_profit = round(current_price + atr * 3, 2)  # 3倍ATR
+    elif trade_point in ("strong_sell", "sell"):
+        entry_price = 0  # 卖出不需要入场价
+        stop_loss = 0
+        take_profit = round(recent_low * 1.02, 2)       # 回落到近期低点附近
+    else:
+        entry_price = 0
+        stop_loss = round(recent_low * 0.97, 2)
+        take_profit = round(recent_high * 1.03, 2)
+
+    return {
+        "trade_point": trade_point,
+        "buy_reasons": buy_reasons,
+        "sell_reasons": sell_reasons,
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "entry_price": entry_price,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "score": score,
+    }
+
+
 def normalize_stock_symbol(symbol: str, market: str = "us") -> tuple:
     """
     标准化股票代码，自动补全市场后缀
@@ -965,6 +1181,215 @@ def normalize_stock_symbol(symbol: str, market: str = "us") -> tuple:
             return f"{sym}.SZ", "cn"
 
     return sym, market.lower()
+
+
+# ==================== V5: 买卖点检测 & 批量扫描 ====================
+
+# 默认美股扫描列表（科技蓝筹）
+DEFAULT_US_SCAN = "AAPL,MSFT,GOOG,AMZN,NVDA,TSLA,META,NFLX,AMD,INTC"
+# 默认港股扫描列表
+DEFAULT_HK_SCAN = "0700,9988,1810,3690,9999,2318,1299,0388,0981,1211"
+# 默认A股扫描列表
+DEFAULT_CN_SCAN = "600519,000858,300750,601318,000001,600036,002410,601899,600900,300059"
+
+
+@app.get("/stock/scan")
+def scan_stocks(
+    symbols: str = "",
+    market: str = "us",
+    min_score: float = 3.0
+):
+    """
+    批量扫描买卖点接口（V5新增，适配 Coze 插件，扁平化返回）
+
+    扫描一篮子股票，识别当前有明确买卖点的标的，按信号强度排序。
+    支持自定义股票列表或使用默认热门列表。
+
+    - **symbols**: 股票代码，逗号分隔（留空使用默认列表）
+    - **market**: 市场（us/hk/cn）
+    - **min_score**: 最低信号分数（默认3.0，只返回评分≥此值的标的）
+    """
+    if market == "auto" or not market:
+        market = "us"
+
+    # 如果没传 symbols，使用默认列表
+    if not symbols or symbols.strip() == "":
+        if market.lower() == "hk":
+            symbols = DEFAULT_HK_SCAN
+        elif market.lower() == "cn":
+            symbols = DEFAULT_CN_SCAN
+        else:
+            symbols = DEFAULT_US_SCAN
+
+    try:
+        symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        if len(symbol_list) > 20:
+            symbol_list = symbol_list[:20]
+
+        # 标准化股票代码
+        normalized = [normalize_stock_symbol(s, market) for s in symbol_list]
+
+        results = []
+        for sym, detected_market in normalized:
+            try:
+                ticker = yf.Ticker(sym)
+                info = ticker.info
+                data = ticker.history(period="6mo")
+
+                if data.empty:
+                    continue
+
+                signal_data = get_trading_signal(data, sym)
+                trade_points = detect_trade_points(data, sym)
+
+                # 过滤掉 HOLD 信号且分数不够的
+                if trade_points["trade_point"] == "hold" and abs(trade_points["score"]) < min_score:
+                    continue
+
+                current_price = round(data['Close'].iloc[-1], 2)
+                prev_close = round(data['Close'].iloc[-2], 2) if len(data) > 1 else current_price
+                change_percent = round((current_price - prev_close) / prev_close * 100, 2) if prev_close != 0 else 0
+
+                name = str(info.get("longName", info.get("shortName", sym)))
+
+                results.append({
+                    "symbol": str(sym),
+                    "name": name,
+                    "current_price": current_price,
+                    "change_percent": change_percent,
+                    "trade_point": str(trade_points["trade_point"]),
+                    "score": trade_points["score"],
+                    "entry_price": trade_points["entry_price"],
+                    "stop_loss": trade_points["stop_loss"],
+                    "take_profit": trade_points["take_profit"],
+                    "buy_reasons_text": "；".join(trade_points["buy_reasons"]) if trade_points["buy_reasons"] else "",
+                    "sell_reasons_text": "；".join(trade_points["sell_reasons"]) if trade_points["sell_reasons"] else "",
+                    "rsi": round(signal_data["indicators"]["rsi"], 2),
+                    "macd_cross": str("golden" if signal_data["indicators"]["macd"]["golden_cross"] else ("death" if signal_data["indicators"]["macd"]["death_cross"] else "none")),
+                    "volume_ratio": signal_data["volume_ratio"],
+                    "trend_direction": str(signal_data["trend_direction"]),
+                    "status": "ok"
+                })
+            except Exception as e:
+                # 静默跳过失败的单只股票
+                continue
+
+        # 按评分绝对值排序（最强的信号排前面）
+        results.sort(key=lambda x: abs(x["score"]), reverse=True)
+
+        # 分类统计
+        buy_stocks = [r for r in results if r["trade_point"] in ("strong_buy", "buy")]
+        sell_stocks = [r for r in results if r["trade_point"] in ("strong_sell", "sell")]
+
+        return {
+            "market": market,
+            "total_scanned": len(symbol_list),
+            "total_signals": len(results),
+            "buy_count": len(buy_stocks),
+            "sell_count": len(sell_stocks),
+            "top_buy": buy_stocks[:3] if buy_stocks else [],
+            "top_sell": sell_stocks[:3] if sell_stocks else [],
+            "all_signals": results,
+            "scan_time": datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量扫描失败: {str(e)}")
+
+
+@app.get("/stock/tradepoint")
+def get_trade_point_flat(symbol: str = "AAPL", market: str = "us"):
+    """
+    单股精准买卖点接口（V5新增，扁平化，适配 Coze 插件）
+
+    专精识别当前是否处于最佳买入/卖出时点。
+    组合MACD、RSI、KDJ、布林带、均线、成交量六大维度，
+    输出明确的买卖点类型、触发原因和价格建议。
+
+    - **symbol**: 股票代码（如 AAPL, 0700, 002410）
+    - **market**: 市场（us/hk/cn）
+    """
+    if symbol == "auto" or not symbol:
+        symbol = "AAPL"
+    if market == "auto" or not market:
+        market = "us"
+
+    symbol, market = normalize_stock_symbol(symbol, market)
+
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        data = ticker.history(period="6mo")
+
+        if data.empty:
+            raise HTTPException(status_code=404, detail="未找到股票数据")
+
+        signal_data = get_trading_signal(data, symbol)
+        trade_points = detect_trade_points(data, symbol)
+        indicators = signal_data["indicators"]
+
+        current_price = round(data['Close'].iloc[-1], 2)
+        prev_close = round(data['Close'].iloc[-2], 2) if len(data) > 1 else current_price
+        change_percent = round((current_price - prev_close) / prev_close * 100, 2) if prev_close != 0 else 0
+
+        # 买卖点类型转中文
+        trade_point_cn = {
+            "strong_buy": "强烈买入",
+            "buy": "建议买入",
+            "sell": "建议卖出",
+            "strong_sell": "强烈卖出",
+            "hold": "观望等待"
+        }
+
+        # 最近5个交易日K线
+        kline_text_lines = []
+        for index, row in data.tail(5).iterrows():
+            kline_text_lines.append(
+                f"{index.strftime('%Y-%m-%d')} 开{round(row['Open'],2)} "
+                f"高{round(row['High'],2)} 低{round(row['Low'],2)} "
+                f"收{round(row['Close'],2)} 量{int(row['Volume'])}"
+            )
+
+        return {
+            # 基础信息
+            "symbol": str(symbol),
+            "name": str(info.get("longName", "N/A")),
+            "current_price": current_price,
+            "change_percent": change_percent,
+            "currency": str(info.get("currency", "USD")),
+            "market": str(market),
+            "analysis_time": datetime.now().isoformat(),
+            # 买卖点核心
+            "trade_point": str(trade_points["trade_point"]),
+            "trade_point_cn": trade_point_cn.get(trade_points["trade_point"], "观望"),
+            "score": trade_points["score"],
+            "buy_reasons_text": "；".join(trade_points["buy_reasons"]) if trade_points["buy_reasons"] else "暂无买入理由",
+            "sell_reasons_text": "；".join(trade_points["sell_reasons"]) if trade_points["sell_reasons"] else "暂无卖出理由",
+            # 价格建议
+            "entry_price": trade_points["entry_price"],
+            "stop_loss": trade_points["stop_loss"],
+            "take_profit": trade_points["take_profit"],
+            # 核心指标（扁平化）
+            "rsi": round(indicators["rsi"], 2),
+            "rsi_prev": round(indicators["rsi_prev"], 2),
+            "macd_cross": str("golden" if indicators["macd"]["golden_cross"] else ("death" if indicators["macd"]["death_cross"] else "none")),
+            "macd_histogram": round(indicators["macd"]["histogram"], 4),
+            "kdj_k": round(indicators["kdj"]["k"], 2),
+            "kdj_d": round(indicators["kdj"]["d"], 2),
+            "kdj_j": round(indicators["kdj"]["j"], 2),
+            # 辅助指标
+            "volume_ratio": signal_data["volume_ratio"],
+            "trend_direction": str(signal_data["trend_direction"]),
+            "support_level": signal_data["support_level"],
+            "resistance_level": signal_data["resistance_level"],
+            # K线
+            "kline_text": "\n".join(kline_text_lines),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"买卖点分析失败: {str(e)}")
 
 
 if __name__ == "__main__":
