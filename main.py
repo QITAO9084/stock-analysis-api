@@ -5,11 +5,13 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Optional
+import time
+import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V3（含多股对比、加密货币支持）",
-    version="3.0.0"
+    description="股票/加密货币分析API - V5（含买卖点检测、缓存重试）",
+    version="5.1.0"
 )
 
 # 允许跨域
@@ -20,6 +22,74 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ===== yfinance 缓存 + 重试机制 =====
+_yf_cache = {}       # {key: {"data": DataFrame, "info": dict, "ts": float}}
+_yf_cache_lock = threading.Lock()
+_CACHE_TTL = 300     # 缓存有效期 5 分钟（秒）
+_MAX_RETRIES = 3     # 限流时最大重试次数
+_RETRY_BASE_DELAY = 2  # 重试基础等待秒数
+
+
+def _cache_key(symbol: str) -> str:
+    """生成缓存 key"""
+    return symbol.upper()
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """判断是否为 yfinance 限流错误"""
+    msg = str(exc).lower()
+    return any(kw in msg for kw in ["rate limit", "too many requests", "429", "timed out"])
+
+
+def fetch_yf_data(symbol: str, period: str = "6mo"):
+    """
+    带 缓存 + 重试 的 yfinance 数据获取
+
+    返回: (ticker_info, history_dataframe)
+    如果全部重试失败，抛出最后的异常
+    """
+    key = _cache_key(symbol)
+    now = time.time()
+
+    # 1. 先查缓存
+    with _yf_cache_lock:
+        if key in _yf_cache:
+            cached = _yf_cache[key]
+            if now - cached["ts"] < _CACHE_TTL:
+                return cached["info"], cached["data"].copy()
+            else:
+                del _yf_cache[key]
+
+    # 2. 请求 + 重试
+    last_exc = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+            data = ticker.history(period=period)
+
+            if data.empty:
+                return info, data
+
+            # 写入缓存
+            with _yf_cache_lock:
+                _yf_cache[key] = {
+                    "info": info,
+                    "data": data.copy(),
+                    "ts": now,
+                }
+            return info, data
+
+        except Exception as e:
+            last_exc = e
+            if _is_rate_limit_error(e) and attempt < _MAX_RETRIES - 1:
+                delay = _RETRY_BASE_DELAY * (2 ** attempt)  # 2s, 4s, 8s
+                time.sleep(delay)
+            else:
+                raise
+
+    raise last_exc
 
 def calculate_rsi(data, period=14):
     """计算RSI指标（返回完整序列，用于趋势判断）"""
@@ -335,8 +405,7 @@ def get_stock_info(symbol: str = "AAPL", market: str = "us"):
     symbol, market = normalize_stock_symbol(symbol, market)
 
     try:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
+        info, _ = fetch_yf_data(symbol, period="1d")
 
         return {
             "symbol": symbol,
@@ -371,8 +440,7 @@ def get_kline_data(symbol: str = "AAPL", market: str = "us", period: str = "1mo"
     symbol, market = normalize_stock_symbol(symbol, market)
 
     try:
-        ticker = yf.Ticker(symbol)
-        data = ticker.history(period=period)
+        _, data = fetch_yf_data(symbol, period=period)
 
         if data.empty:
             raise HTTPException(status_code=404, detail="未找到股票数据")
@@ -413,8 +481,7 @@ def get_trading_signal_api(symbol: str = "AAPL", market: str = "us"):
     symbol, market = normalize_stock_symbol(symbol, market)
 
     try:
-        ticker = yf.Ticker(symbol)
-        data = ticker.history(period="3mo")
+        _, data = fetch_yf_data(symbol, period="3mo")
         
         if data.empty:
             raise HTTPException(status_code=404, detail="未找到股票数据")
@@ -443,13 +510,8 @@ def analyze_stock(symbol: str = "AAPL", market: str = "us"):
     symbol, market = normalize_stock_symbol(symbol, market)
 
     try:
-        ticker = yf.Ticker(symbol)
-
-        # 获取股票信息
-        info = ticker.info
-
-        # 获取历史数据
-        data = ticker.history(period="6mo")
+        # 获取股票信息 + 历史数据（带缓存和重试）
+        info, data = fetch_yf_data(symbol, period="6mo")
 
         if data.empty:
             raise HTTPException(status_code=404, detail="未找到股票数据")
@@ -524,9 +586,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
     symbol, market = normalize_stock_symbol(symbol, market)
 
     try:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
-        data = ticker.history(period="6mo")
+        info, data = fetch_yf_data(symbol)
 
         if data.empty:
             raise HTTPException(status_code=404, detail="未找到股票数据")
@@ -651,9 +711,7 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us"):
         results = []
         for sym in symbol_list:
             try:
-                ticker = yf.Ticker(sym)
-                info = ticker.info
-                data = ticker.history(period="6mo")
+                info, data = fetch_yf_data(sym, period="6mo")
 
                 if data.empty:
                     results.append({
@@ -744,9 +802,7 @@ def analyze_crypto(symbol: str = "BTC-USD"):
         symbol = symbol_upper + "-USD"
 
     try:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
-        data = ticker.history(period="6mo")
+        info, data = fetch_yf_data(symbol, period="6mo")
 
         if data.empty:
             raise HTTPException(status_code=404, detail=f"未找到加密货币数据: {symbol}")
@@ -872,8 +928,7 @@ def analyze_forex(pair: str = "USDCNY"):
         yf_symbol = pair_upper
 
     try:
-        ticker = yf.Ticker(yf_symbol)
-        data = ticker.history(period="6mo")
+        _, data = fetch_yf_data(yf_symbol, period="6mo")
 
         if data.empty:
             raise HTTPException(status_code=404, detail=f"未找到汇率数据: {pair}（yfinance代码: {yf_symbol}）")
@@ -1230,11 +1285,11 @@ def scan_stocks(
         normalized = [normalize_stock_symbol(s, market) for s in symbol_list]
 
         results = []
+        failed_count = 0
+        last_error = ""
         for sym, detected_market in normalized:
             try:
-                ticker = yf.Ticker(sym)
-                info = ticker.info
-                data = ticker.history(period="6mo")
+                info, data = fetch_yf_data(sym)
 
                 if data.empty:
                     continue
@@ -1271,7 +1326,8 @@ def scan_stocks(
                     "status": "ok"
                 })
             except Exception as e:
-                # 静默跳过失败的单只股票
+                failed_count += 1
+                last_error = str(e)
                 continue
 
         # 按评分绝对值排序（最强的信号排前面）
@@ -1285,6 +1341,8 @@ def scan_stocks(
             "market": market,
             "total_scanned": len(symbol_list),
             "total_signals": len(results),
+            "failed_count": failed_count,
+            "last_error": last_error if failed_count > 0 else "",
             "buy_count": len(buy_stocks),
             "sell_count": len(sell_stocks),
             "top_buy": buy_stocks[:3] if buy_stocks else [],
@@ -1317,9 +1375,7 @@ def get_trade_point_flat(symbol: str = "AAPL", market: str = "us"):
     symbol, market = normalize_stock_symbol(symbol, market)
 
     try:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
-        data = ticker.history(period="6mo")
+        info, data = fetch_yf_data(symbol)
 
         if data.empty:
             raise HTTPException(status_code=404, detail="未找到股票数据")
