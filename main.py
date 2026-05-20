@@ -45,6 +45,17 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     return any(kw in msg for kw in ["rate limit", "too many requests", "429", "timed out"])
 
 
+def _rate_limit_wait():
+    """请求限速：确保两次 yfinance 请求之间至少间隔 _MIN_REQUEST_INTERVAL 秒"""
+    global _last_request_ts
+    with _request_lock:
+        now = time.time()
+        elapsed = now - _last_request_ts
+        if elapsed < _MIN_REQUEST_INTERVAL:
+            time.sleep(_MIN_REQUEST_INTERVAL - elapsed)
+        _last_request_ts = time.time()
+
+
 def fetch_yf_data(symbol: str, period: str = "6mo"):
     """
     带 缓存 + 重试 + 限速 的 yfinance 数据获取
