@@ -10,8 +10,8 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5（含买卖点检测、缓存重试）",
-    version="5.1.0"
+    description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
+    version="5.2.0"
 )
 
 # 允许跨域
@@ -23,12 +23,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ===== yfinance 缓存 + 重试机制 =====
+# ===== yfinance 缓存 + 重试 + 限速机制 =====
 _yf_cache = {}       # {key: {"data": DataFrame, "info": dict, "ts": float}}
 _yf_cache_lock = threading.Lock()
-_CACHE_TTL = 300     # 缓存有效期 5 分钟（秒）
+_CACHE_TTL = 900     # 缓存有效期 15 分钟（秒）
 _MAX_RETRIES = 3     # 限流时最大重试次数
 _RETRY_BASE_DELAY = 2  # 重试基础等待秒数
+_last_request_ts = 0.0  # 上次 yfinance 请求时间戳
+_request_lock = threading.Lock()
+_MIN_REQUEST_INTERVAL = 1.5  # 两次 yfinance 请求最小间隔（秒）
 
 
 def _cache_key(symbol: str) -> str:
@@ -44,7 +47,7 @@ def _is_rate_limit_error(exc: Exception) -> bool:
 
 def fetch_yf_data(symbol: str, period: str = "6mo"):
     """
-    带 缓存 + 重试 的 yfinance 数据获取
+    带 缓存 + 重试 + 限速 的 yfinance 数据获取
 
     返回: (ticker_info, history_dataframe)
     如果全部重试失败，抛出最后的异常
@@ -61,10 +64,11 @@ def fetch_yf_data(symbol: str, period: str = "6mo"):
             else:
                 del _yf_cache[key]
 
-    # 2. 请求 + 重试
+    # 2. 限速等待 + 请求 + 重试
     last_exc = None
     for attempt in range(_MAX_RETRIES):
         try:
+            _rate_limit_wait()
             ticker = yf.Ticker(symbol)
             info = ticker.info
             data = ticker.history(period=period)
