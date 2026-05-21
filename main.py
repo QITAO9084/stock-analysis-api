@@ -1618,7 +1618,7 @@ async def ganzhi_map(
     # 月相
     moon_phase = _MOON_PHASE.get(lunar_day, "未知")
 
-    # 旺行/生行/克行的红球号码
+    # 旺行/生行/克行的红球号码（仅用于formatted_shengke，不再单独返回）
     wang_red = _fmt(_WUXING_MAP[shengke["旺行"]]["red_balls"])
     sheng_wo_red = _fmt(_WUXING_MAP[shengke["生我行"]]["red_balls"])
     wo_sheng_red = _fmt(_WUXING_MAP[shengke["我生行(泄)"]]["red_balls"])
@@ -1668,37 +1668,7 @@ async def ganzhi_map(
         "wuxing_tu_red": _fmt(_WUXING_MAP["土"]["red_balls"]),
         "wuxing_tu_blue": _fmt(_WUXING_MAP["土"]["blue_balls"]),
 
-        # ===== 五行生克（基于日干） =====
-        "shengke_wang": shengke["旺行"],
-        "shengke_sheng_wo": f"{shengke['生我行']}→{shengke['旺行']}",
-        "shengke_wo_sheng": f"{shengke['旺行']}→{shengke['我生行(泄)']}",
-        "shengke_ke_wo": f"{shengke['克我行']}→{shengke['旺行']}",
-        "shengke_wo_ke": f"{shengke['旺行']}→{shengke['我克行']}",
-        "wang_red_balls": wang_red,
-        "sheng_wo_red_balls": sheng_wo_red,
-        "wo_sheng_red_balls": wo_sheng_red,
-        "ke_wo_red_balls": ke_wo_red,
-        "wo_ke_red_balls": wo_ke_red,
-
-        # ===== 日月水火 =====
-        "sun_desc": _SUN_MOON_MAP["日"]["desc"],
-        "sun_red_balls": _fmt(_SUN_MOON_MAP["日"]["red_balls"]),
-        "sun_blue_balls": _fmt(_SUN_MOON_MAP["日"]["blue_balls"]),
-        "moon_desc": _SUN_MOON_MAP["月"]["desc"],
-        "moon_red_balls": _fmt(_SUN_MOON_MAP["月"]["red_balls"]),
-        "moon_blue_balls": _fmt(_SUN_MOON_MAP["月"]["blue_balls"]),
-        "water_desc": _SUN_MOON_MAP["水"]["desc"],
-        "water_red_balls": _fmt(_SUN_MOON_MAP["水"]["red_balls"]),
-        "water_blue_balls": _fmt(_SUN_MOON_MAP["水"]["blue_balls"]),
-        "fire_desc": _SUN_MOON_MAP["火"]["desc"],
-        "fire_red_balls": _fmt(_SUN_MOON_MAP["火"]["red_balls"]),
-        "fire_blue_balls": _fmt(_SUN_MOON_MAP["火"]["blue_balls"]),
-
-        # ===== 月相 =====
-        "lunar_day": lunar_day,
-        "moon_phase": moon_phase,
-
-        # ===== 预格式化输出（Agent直接复制粘贴，禁止修改） =====
+        # ===== 预格式化输出（Agent直接复制粘贴，唯一数据源） =====
         "formatted_shengke": (
             f"【五行生克分析（娱乐）】\n"
             f"基于日柱天干{day_gan}（{day_wuxing}行）的五行生克关系：\n"
