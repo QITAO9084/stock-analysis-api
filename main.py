@@ -1482,6 +1482,226 @@ def get_trade_point_flat(symbol: str = "AAPL", market: str = "us"):
         raise HTTPException(status_code=500, detail=f"买卖点分析失败: {str(e)}")
 
 
+# ===== 双色球玄学号码映射 API =====
+
+# 天干号码映射（红球1-33）
+_TIANGAN_MAP = {
+    "甲": {"wuxing": "木", "red_balls": [1, 11, 21, 31]},
+    "乙": {"wuxing": "木", "red_balls": [2, 12, 22, 32]},
+    "丙": {"wuxing": "火", "red_balls": [3, 13, 23, 33]},
+    "丁": {"wuxing": "火", "red_balls": [4, 14, 24]},
+    "戊": {"wuxing": "土", "red_balls": [5, 15, 25]},
+    "己": {"wuxing": "土", "red_balls": [6, 16, 26]},
+    "庚": {"wuxing": "金", "red_balls": [7, 17, 27]},
+    "辛": {"wuxing": "金", "red_balls": [8, 18, 28]},
+    "壬": {"wuxing": "水", "red_balls": [9, 19, 29]},
+    "癸": {"wuxing": "水", "red_balls": [10, 20, 30]},
+}
+
+# 地支号码映射（红球1-33）
+_DIZHI_RED_MAP = {
+    "子": {"wuxing": "水", "red_balls": [1, 13, 25]},
+    "丑": {"wuxing": "土", "red_balls": [2, 14, 26]},
+    "寅": {"wuxing": "木", "red_balls": [3, 15, 27]},
+    "卯": {"wuxing": "木", "red_balls": [4, 16, 28]},
+    "辰": {"wuxing": "土", "red_balls": [5, 17, 29]},
+    "巳": {"wuxing": "火", "red_balls": [6, 18, 30]},
+    "午": {"wuxing": "火", "red_balls": [7, 19, 31]},
+    "未": {"wuxing": "土", "red_balls": [8, 20, 32]},
+    "申": {"wuxing": "金", "red_balls": [9, 21, 33]},
+    "酉": {"wuxing": "金", "red_balls": [10, 22]},
+    "戌": {"wuxing": "土", "red_balls": [11, 23]},
+    "亥": {"wuxing": "水", "red_balls": [12, 24]},
+}
+
+# 地支号码映射（蓝球1-16）
+_DIZHI_BLUE_MAP = {
+    "子": 1, "丑": 2, "寅": 3, "卯": 4, "辰": 5, "巳": 6,
+    "午": 7, "未": 8, "申": 9, "酉": 10, "戌": 11, "亥": 12,
+}
+
+# 五行号码总表（天干·地支·八卦综合映射）
+_WUXING_MAP = {
+    "金": {"red_balls": [7, 8, 9, 10, 17, 18, 25, 26], "blue_balls": [9, 10]},
+    "木": {"red_balls": [1, 2, 3, 4, 15, 16, 23, 24, 31, 32], "blue_balls": [3, 4]},
+    "水": {"red_balls": [7, 8, 19, 20, 27, 28, 33], "blue_balls": [1, 6, 12, 16]},
+    "火": {"red_balls": [3, 4, 6, 11, 12, 18, 29, 30], "blue_balls": [7, 13]},
+    "土": {"red_balls": [2, 5, 6, 13, 14, 21, 22, 27, 28], "blue_balls": [2, 5, 8, 11, 14, 15]},
+}
+
+# 日月水火映射表
+_SUN_MOON_MAP = {
+    "日": {"desc": "太阳·离卦·火·阳", "red_balls": [3, 4, 11, 29, 30], "blue_balls": [7]},
+    "月": {"desc": "太阴·坎卦·水·阴", "red_balls": [7, 8, 19, 20, 27, 28], "blue_balls": [6]},
+    "水": {"desc": "坎卦·壬癸·亥子", "red_balls": [7, 8, 19, 20, 27, 28, 33], "blue_balls": [1, 6]},
+    "火": {"desc": "离卦·丙丁·巳午", "red_balls": [3, 4, 11, 12, 29, 30], "blue_balls": [7, 9]},
+}
+
+# 五行生克关系
+_SHENGKE = {
+    "相生": {"木生火": True, "火生土": True, "土生金": True, "金生水": True, "水生木": True},
+    "相克": {"木克土": True, "土克水": True, "水克火": True, "火克金": True, "金克木": True},
+}
+
+# 月相判断
+_MOON_PHASE = {
+    1: "朔（新月）", 2: "朔后", 3: "朔后", 4: "朔后", 5: "上弦前",
+    6: "上弦前", 7: "上弦前", 8: "上弦", 9: "上弦后", 10: "上弦后",
+    11: "上弦后", 12: "望前", 13: "望前", 14: "望前", 15: "望（满月）",
+    16: "望后", 17: "望后", 18: "望后", 19: "望后", 20: "下弦前",
+    21: "下弦前", 22: "下弦前", 23: "下弦", 24: "下弦后", 25: "下弦后",
+    26: "下弦后", 27: "下弦后", 28: "晦前", 29: "晦", 30: "晦",
+}
+
+
+def _fmt(nums: list) -> str:
+    """格式化号码列表为逗号分隔字符串，两位补零"""
+    return ", ".join(f"{n:02d}" for n in nums)
+
+
+def _get_shengke_info(day_wuxing: str) -> dict:
+    """根据日柱五行获取生克关系"""
+    sheng_order = ["木", "火", "土", "金", "水"]
+    idx = sheng_order.index(day_wuxing)
+    # 我生（泄）= 下一行，生我= 上一行，克我= 上一行的上一行，我克= 下一行的下一行
+    sheng_wo = sheng_order[(idx - 1) % 5]   # 生我者
+    wo_sheng = sheng_order[(idx + 1) % 5]   # 我生者（泄）
+    ke_wo = sheng_order[(idx - 2) % 5]      # 克我者
+    wo_ke = sheng_order[(idx + 2) % 5]      # 我克者
+    return {
+        "旺行": day_wuxing,
+        "生我行": sheng_wo,
+        "我生行(泄)": wo_sheng,
+        "克我行": ke_wo,
+        "我克行": wo_ke,
+    }
+
+
+@app.get("/ganzhi/map", tags=["双色球玄学映射"])
+async def ganzhi_map(
+    year_gan: str = "甲", year_zhi: str = "子",
+    month_gan: str = "甲", month_zhi: str = "子",
+    day_gan: str = "甲", day_zhi: str = "子",
+    lunar_day: int = 1,
+):
+    """
+    双色球玄学号码映射接口 - 根据天干地支返回对应红球蓝球号码。
+    参数从知识库查询结果中获取，传入本接口获取准确的号码映射。
+    """
+    # 天干映射
+    yg = _TIANGAN_MAP.get(year_gan)
+    mg = _TIANGAN_MAP.get(month_gan)
+    dg = _TIANGAN_MAP.get(day_gan)
+    # 地支映射
+    yz = _DIZHI_RED_MAP.get(year_zhi)
+    mz = _DIZHI_RED_MAP.get(month_zhi)
+    dz = _DIZHI_RED_MAP.get(day_zhi)
+
+    if not all([yg, mg, dg, yz, mz, dz]):
+        raise HTTPException(status_code=400, detail=f"无效的天干或地支参数。天干可选：甲乙丙丁戊己庚辛壬癸；地支可选：子丑寅卯辰巳午未申酉戌亥")
+
+    # 地支蓝球
+    yz_blue = _DIZHI_BLUE_MAP.get(year_zhi, 0)
+    mz_blue = _DIZHI_BLUE_MAP.get(month_zhi, 0)
+    dz_blue = _DIZHI_BLUE_MAP.get(day_zhi, 0)
+
+    # 天干蓝球（按五行取蓝球）
+    _wuxing_blue_map = {"金": _WUXING_MAP["金"]["blue_balls"], "木": _WUXING_MAP["木"]["blue_balls"], "水": _WUXING_MAP["水"]["blue_balls"], "火": _WUXING_MAP["火"]["blue_balls"], "土": _WUXING_MAP["土"]["blue_balls"]}
+    yg_blue = _fmt(_wuxing_blue_map[yg["wuxing"]])
+    mg_blue = _fmt(_wuxing_blue_map[mg["wuxing"]])
+    dg_blue = _fmt(_wuxing_blue_map[dg["wuxing"]])
+
+    # 五行生克分析（基于日柱天干五行）
+    day_wuxing = dg["wuxing"]
+    shengke = _get_shengke_info(day_wuxing)
+
+    # 月相
+    moon_phase = _MOON_PHASE.get(lunar_day, "未知")
+
+    # 旺行/生行/克行的红球号码
+    wang_red = _fmt(_WUXING_MAP[shengke["旺行"]]["red_balls"])
+    sheng_wo_red = _fmt(_WUXING_MAP[shengke["生我行"]]["red_balls"])
+    wo_sheng_red = _fmt(_WUXING_MAP[shengke["我生行(泄)"]]["red_balls"])
+    ke_wo_red = _fmt(_WUXING_MAP[shengke["克我行"]]["red_balls"])
+    wo_ke_red = _fmt(_WUXING_MAP[shengke["我克行"]]["red_balls"])
+
+    result = {
+        # ===== 年柱映射 =====
+        "year_gan_name": year_gan,
+        "year_gan_wuxing": yg["wuxing"],
+        "year_gan_red_balls": _fmt(yg["red_balls"]),
+        "year_gan_blue_balls": yg_blue,
+        "year_zhi_name": year_zhi,
+        "year_zhi_wuxing": yz["wuxing"],
+        "year_zhi_red_balls": _fmt(yz["red_balls"]),
+        "year_zhi_blue_ball": f"{yz_blue:02d}",
+
+        # ===== 月柱映射 =====
+        "month_gan_name": month_gan,
+        "month_gan_wuxing": mg["wuxing"],
+        "month_gan_red_balls": _fmt(mg["red_balls"]),
+        "month_gan_blue_balls": mg_blue,
+        "month_zhi_name": month_zhi,
+        "month_zhi_wuxing": mz["wuxing"],
+        "month_zhi_red_balls": _fmt(mz["red_balls"]),
+        "month_zhi_blue_ball": f"{mz_blue:02d}",
+
+        # ===== 日柱映射 =====
+        "day_gan_name": day_gan,
+        "day_gan_wuxing": dg["wuxing"],
+        "day_gan_red_balls": _fmt(dg["red_balls"]),
+        "day_gan_blue_balls": dg_blue,
+        "day_zhi_name": day_zhi,
+        "day_zhi_wuxing": dz["wuxing"],
+        "day_zhi_red_balls": _fmt(dz["red_balls"]),
+        "day_zhi_blue_ball": f"{dz_blue:02d}",
+
+        # ===== 五行号码总表 =====
+        "wuxing_jin_red": _fmt(_WUXING_MAP["金"]["red_balls"]),
+        "wuxing_jin_blue": _fmt(_WUXING_MAP["金"]["blue_balls"]),
+        "wuxing_mu_red": _fmt(_WUXING_MAP["木"]["red_balls"]),
+        "wuxing_mu_blue": _fmt(_WUXING_MAP["木"]["blue_balls"]),
+        "wuxing_shui_red": _fmt(_WUXING_MAP["水"]["red_balls"]),
+        "wuxing_shui_blue": _fmt(_WUXING_MAP["水"]["blue_balls"]),
+        "wuxing_huo_red": _fmt(_WUXING_MAP["火"]["red_balls"]),
+        "wuxing_huo_blue": _fmt(_WUXING_MAP["火"]["blue_balls"]),
+        "wuxing_tu_red": _fmt(_WUXING_MAP["土"]["red_balls"]),
+        "wuxing_tu_blue": _fmt(_WUXING_MAP["土"]["blue_balls"]),
+
+        # ===== 五行生克（基于日干） =====
+        "shengke_wang": shengke["旺行"],
+        "shengke_sheng_wo": f"{shengke['生我行']}→{shengke['旺行']}",
+        "shengke_wo_sheng": f"{shengke['旺行']}→{shengke['我生行(泄)']}",
+        "shengke_ke_wo": f"{shengke['克我行']}→{shengke['旺行']}",
+        "shengke_wo_ke": f"{shengke['旺行']}→{shengke['我克行']}",
+        "wang_red_balls": wang_red,
+        "sheng_wo_red_balls": sheng_wo_red,
+        "wo_sheng_red_balls": wo_sheng_red,
+        "ke_wo_red_balls": ke_wo_red,
+        "wo_ke_red_balls": wo_ke_red,
+
+        # ===== 日月水火 =====
+        "sun_desc": _SUN_MOON_MAP["日"]["desc"],
+        "sun_red_balls": _fmt(_SUN_MOON_MAP["日"]["red_balls"]),
+        "sun_blue_balls": _fmt(_SUN_MOON_MAP["日"]["blue_balls"]),
+        "moon_desc": _SUN_MOON_MAP["月"]["desc"],
+        "moon_red_balls": _fmt(_SUN_MOON_MAP["月"]["red_balls"]),
+        "moon_blue_balls": _fmt(_SUN_MOON_MAP["月"]["blue_balls"]),
+        "water_desc": _SUN_MOON_MAP["水"]["desc"],
+        "water_red_balls": _fmt(_SUN_MOON_MAP["水"]["red_balls"]),
+        "water_blue_balls": _fmt(_SUN_MOON_MAP["水"]["blue_balls"]),
+        "fire_desc": _SUN_MOON_MAP["火"]["desc"],
+        "fire_red_balls": _fmt(_SUN_MOON_MAP["火"]["red_balls"]),
+        "fire_blue_balls": _fmt(_SUN_MOON_MAP["火"]["blue_balls"]),
+
+        # ===== 月相 =====
+        "lunar_day": lunar_day,
+        "moon_phase": moon_phase,
+    }
+
+    return result
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

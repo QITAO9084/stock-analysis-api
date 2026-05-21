@@ -1,31 +1,43 @@
 {
-  "openapi": "3.0.3",
+  "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "美股港股买卖点分析接口，供 Coze AI Agent 调用",
-    "version": "1.0.0"
+    "description": "股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
+    "version": "5.2.0"
   },
-  "servers": [
-    {
-      "url": "https://stock-analysis-api-n741.onrender.com",
-      "description": "Production server"
-    }
-  ],
   "paths": {
+    "/": {
+      "get": {
+        "summary": "Read Root",
+        "description": "API健康检查",
+        "operationId": "read_root__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/stock/info": {
       "get": {
-        "summary": "获取股票基本信息",
-        "operationId": "getStockInfo",
+        "summary": "Get Stock Info",
+        "description": "获取股票基本信息\n\n- **symbol**: 股票代码（如 AAPL, 00700）\n- **market**: 市场（us/hk/cn）",
+        "operationId": "get_stock_info_stock_info_get",
         "parameters": [
           {
             "name": "symbol",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string",
-              "description": "股票代码，如 AAPL / 0700.HK"
-            },
-            "description": "股票代码，如 AAPL / 0700.HK"
+              "default": "AAPL",
+              "title": "Symbol"
+            }
           },
           {
             "name": "market",
@@ -33,26 +45,26 @@
             "required": false,
             "schema": {
               "type": "string",
-              "description": "市场：us / hk / auto",
-              "default": "auto"
-            },
-            "description": "市场：us / hk / auto"
+              "default": "us",
+              "title": "Market"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "成功返回股票基本信息",
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "symbol": {"type": "string"},
-                    "name": {"type": "string"},
-                    "current_price": {"type": "number"},
-                    "change_percent": {"type": "number"},
-                    "currency": {"type": "string"}
-                  }
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -62,18 +74,29 @@
     },
     "/stock/kline": {
       "get": {
-        "summary": "获取K线数据和技术指标",
-        "operationId": "getKline",
+        "summary": "Get Kline Data",
+        "description": "获取K线数据\n\n- **symbol**: 股票代码\n- **market**: 市场（us/hk/cn）\n- **period**: 时间周期（1d/5d/1mo/3mo/6mo/1y）",
+        "operationId": "get_kline_data_stock_kline_get",
         "parameters": [
           {
             "name": "symbol",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string",
-              "description": "股票代码"
-            },
-            "description": "股票代码"
+              "default": "AAPL",
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "us",
+              "title": "Market"
+            }
           },
           {
             "name": "period",
@@ -81,31 +104,26 @@
             "required": false,
             "schema": {
               "type": "string",
-              "description": "周期：1mo/3mo/6mo/1y/2y",
-              "default": "6mo"
-            },
-            "description": "周期：1mo/3mo/6mo/1y/2y"
-          },
-          {
-            "name": "interval",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "description": "K线间隔：1d/1wk/1mo",
-              "default": "1d"
-            },
-            "description": "K线间隔：1d/1wk/1mo"
+              "default": "1mo",
+              "title": "Period"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "成功返回K线数据",
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {"type": "object"}
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -115,15 +133,18 @@
     },
     "/stock/signal": {
       "get": {
-        "summary": "综合买卖信号分析",
-        "operationId": "getSignal",
+        "summary": "Get Trading Signal Api",
+        "description": "获取买卖信号\n\n- **symbol**: 股票代码\n- **market**: 市场（us/hk/cn）",
+        "operationId": "get_trading_signal_api_stock_signal_get",
         "parameters": [
           {
             "name": "symbol",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "default": "AAPL",
+              "title": "Symbol"
             }
           },
           {
@@ -132,21 +153,26 @@
             "required": false,
             "schema": {
               "type": "string",
-              "default": "auto"
+              "default": "us",
+              "title": "Market"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "成功返回买卖信号",
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "signals": {"type": "object"},
-                    "recommendation": {"type": "string"}
-                  }
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -156,16 +182,18 @@
     },
     "/stock/analyze": {
       "get": {
-        "summary": "完整分析报告（一键调用）",
-        "description": "Coze Agent 主要调用这个接口，一次拿到所有分析数据",
-        "operationId": "fullAnalysis",
+        "summary": "Analyze Stock",
+        "description": "完整股票分析（Coze AI Agent 主要调用接口）\n\n一次返回：股票信息 + 买卖信号 + K线数据\nCoze Agent 只需调用这一个接口即可完成全部分析\n\n- **symbol**: 股票代码（如 AAPL, 00700.HK）\n- **market**: 市场（us/hk/cn）",
+        "operationId": "analyze_stock_stock_analyze_get",
         "parameters": [
           {
             "name": "symbol",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "default": "AAPL",
+              "title": "Symbol"
             }
           },
           {
@@ -174,27 +202,163 @@
             "required": false,
             "schema": {
               "type": "string",
-              "default": "auto"
+              "default": "us",
+              "title": "Market"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "成功返回完整分析报告",
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "stock": {"type": "object"},
-                    "indicators": {"type": "object"},
-                    "signals": {"type": "object"},
-                    "kline_60d": {
-                      "type": "array",
-                      "items": {"type": "object"}
-                    },
-                    "disclaimer": {"type": "string"}
-                  }
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stock/analyze2": {
+      "get": {
+        "summary": "Analyze Stock Flat",
+        "description": "扁平化股票分析接口（专为 Coze 插件优化）\n\n所有字段扁平返回，避免嵌套 Object/Array 导致 Coze 解析问题。\nCoze 插件只需配置 String 和 Number 类型的输出参数。\n\n- **symbol**: 股票代码（如 AAPL, 00700.HK）\n- **market**: 市场（us/hk/cn）",
+        "operationId": "analyze_stock_flat_stock_analyze2_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "AAPL",
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "us",
+              "title": "Market"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stock/compare": {
+      "get": {
+        "summary": "Compare Stocks",
+        "description": "多股对比分析接口（专为 Coze 插件优化，扁平化返回）\n\n传入多个股票代码（逗号分隔），返回每只股票的核心指标对比。\n最多支持5只股票同时对比。\n\n- **symbols**: 股票代码，逗号分隔（如 \"AAPL,MSFT,GOOG\"）\n- **market**: 市场（us/hk）",
+        "operationId": "compare_stocks_stock_compare_get",
+        "parameters": [
+          {
+            "name": "symbols",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "AAPL,MSFT,GOOG",
+              "title": "Symbols"
+            }
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "us",
+              "title": "Market"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/crypto/analyze": {
+      "get": {
+        "summary": "Analyze Crypto",
+        "description": "加密货币分析接口（扁平化，适配 Coze 插件）\n\n复用现有技术指标计算逻辑，支持比特币、以太坊等主流加密货币。\nyfinance 格式：BTC-USD, ETH-USD, BNB-USD 等。\n\n- **symbol**: 加密货币代码（如 BTC-USD, ETH-USD）",
+        "operationId": "analyze_crypto_crypto_analyze_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "BTC-USD",
+              "title": "Symbol"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -204,51 +368,308 @@
     },
     "/forex/analyze": {
       "get": {
-        "summary": "汇率技术分析（支持USDCNY、USDJPY等）",
-        "description": "分析主流汇率对的技术指标（RSI/MACD/KDJ/布林带/均线），返回扁平化数据适配Coze插件",
-        "operationId": "forexAnalyze",
+        "summary": "Analyze Forex",
+        "description": "汇率技术分析接口（扁平化，适配 Coze 插件）\n\n支持主流汇率对的技术分析，复用现有技术指标计算逻辑。\nyfinance 数据源，每日更新。\n\n- **pair**: 汇率对代码，如 USDCNY、USDJPY、USDEUR、USDGBP、USDKRW、USDHKD",
+        "operationId": "analyze_forex_forex_analyze_get",
         "parameters": [
           {
             "name": "pair",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string",
-              "description": "汇率对代码，如 USDCNY、USDJPY、USDEUR、USDGBP、USDKRW、USDHKD",
-              "default": "USDCNY"
-            },
-            "description": "汇率对代码，如 USDCNY、USDJPY、USDEUR、USDGBP、USDKRW、USDHKD"
+              "default": "USDCNY",
+              "title": "Pair"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "成功返回汇率分析报告",
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "pair": {"type": "string", "description": "汇率对代码"},
-                    "name": {"type": "string", "description": "汇率对中文名"},
-                    "current_price": {"type": "number", "description": "当前汇率"},
-                    "change_percent": {"type": "number", "description": "涨跌幅%"},
-                    "volatility_20d": {"type": "number", "description": "20日波动率%"},
-                    "signal": {"type": "string", "description": "BUY/SELL/HOLD"},
-                    "confidence": {"type": "string", "description": "HIGH/MEDIUM/LOW"},
-                    "rsi": {"type": "number"},
-                    "rsi_prev": {"type": "number"},
-                    "macd_histogram": {"type": "number"},
-                    "kdj_k": {"type": "number"},
-                    "kdj_d": {"type": "number"},
-                    "trend_direction": {"type": "string"},
-                    "key_signals_text": {"type": "string"},
-                    "kline_text": {"type": "string"}
-                  }
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
           }
         }
+      }
+    },
+    "/stock/scan": {
+      "get": {
+        "summary": "Scan Stocks",
+        "description": "批量扫描买卖点接口（V5新增，适配 Coze 插件，扁平化返回）\n\n扫描一篮子股票，识别当前有明确买卖点的标的，按信号强度排序。\n支持自定义股票列表或使用默认热门列表。\n\n- **symbols**: 股票代码，逗号分隔（留空使用默认列表）\n- **market**: 市场（us/hk/cn）\n- **min_score**: 最低信号分数（默认3.0，只返回评分≥此值的标的）",
+        "operationId": "scan_stocks_stock_scan_get",
+        "parameters": [
+          {
+            "name": "symbols",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Symbols"
+            }
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "us",
+              "title": "Market"
+            }
+          },
+          {
+            "name": "min_score",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 3.0,
+              "title": "Min Score"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stock/tradepoint": {
+      "get": {
+        "summary": "Get Trade Point Flat",
+        "description": "单股精准买卖点接口（V5新增，扁平化，适配 Coze 插件）\n\n专精识别当前是否处于最佳买入/卖出时点。\n组合MACD、RSI、KDJ、布林带、均线、成交量六大维度，\n输出明确的买卖点类型、触发原因和价格建议。\n\n- **symbol**: 股票代码（如 AAPL, 0700, 002410）\n- **market**: 市场（us/hk/cn）",
+        "operationId": "get_trade_point_flat_stock_tradepoint_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "AAPL",
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "us",
+              "title": "Market"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ganzhi/map": {
+      "get": {
+        "tags": [
+          "双色球玄学映射"
+        ],
+        "summary": "Ganzhi Map",
+        "description": "双色球玄学号码映射接口 - 根据天干地支返回对应红球蓝球号码。\n参数从知识库查询结果中获取，传入本接口获取准确的号码映射。",
+        "operationId": "ganzhi_map_ganzhi_map_get",
+        "parameters": [
+          {
+            "name": "year_gan",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "甲",
+              "title": "Year Gan"
+            }
+          },
+          {
+            "name": "year_zhi",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "子",
+              "title": "Year Zhi"
+            }
+          },
+          {
+            "name": "month_gan",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "甲",
+              "title": "Month Gan"
+            }
+          },
+          {
+            "name": "month_zhi",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "子",
+              "title": "Month Zhi"
+            }
+          },
+          {
+            "name": "day_gan",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "甲",
+              "title": "Day Gan"
+            }
+          },
+          {
+            "name": "day_zhi",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "子",
+              "title": "Day Zhi"
+            }
+          },
+          {
+            "name": "lunar_day",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "title": "Lunar Day"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
       }
     }
   }

@@ -1,6 +1,6 @@
 {
   "name": "stock_analysis_api",
-  "description": "美股港股买卖点分析API，提供股票基本信息、K线数据、技术指标（MA/MACD/RSI）和买卖信号分析",
+  "description": "股票分析与双色球玄学号码映射API，提供股票技术分析、买卖信号和天干地支/五行/日月水火号码映射",
   "api": {
     "type": "openapi",
     "url": "http://YOUR_SERVER_IP:8000/openapi.json",
@@ -87,6 +87,44 @@
           }
         },
         "required": ["symbol"]
+      }
+    },
+    {
+      "name": "get_ganzhi_map",
+      "description": "天干地支号码映射（双色球玄学分析专用）。输入年月日柱的天干地支，返回对应的红球蓝球号码、五行生克关系、日月水火号码。从知识库查到干支数据后调用此接口获取准确号码，禁止自行映射号码。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "year_gan": {
+            "type": "string",
+            "description": "年柱天干：甲/乙/丙/丁/戊/己/庚/辛/壬/癸"
+          },
+          "year_zhi": {
+            "type": "string",
+            "description": "年柱地支：子/丑/寅/卯/辰/巳/午/未/申/酉/戌/亥"
+          },
+          "month_gan": {
+            "type": "string",
+            "description": "月柱天干"
+          },
+          "month_zhi": {
+            "type": "string",
+            "description": "月柱地支"
+          },
+          "day_gan": {
+            "type": "string",
+            "description": "日柱天干"
+          },
+          "day_zhi": {
+            "type": "string",
+            "description": "日柱地支"
+          },
+          "lunar_day": {
+            "type": "integer",
+            "description": "阴历日数(1-30)，用于判断月相"
+          }
+        },
+        "required": ["year_gan", "year_zhi", "month_gan", "month_zhi", "day_gan", "day_zhi", "lunar_day"]
       }
     }
   ]
