@@ -27,12 +27,13 @@ app.add_middleware(
 # ===== yfinance 缓存 + 重试 + 限速机制 =====
 _yf_cache = {}       # {key: {"data": DataFrame, "info": dict, "ts": float}}
 _yf_cache_lock = threading.Lock()
-_CACHE_TTL = 900     # 缓存有效期 15 分钟（秒）
-_MAX_RETRIES = 3     # 限流时最大重试次数
-_RETRY_BASE_DELAY = 2  # 重试基础等待秒数
+_CACHE_TTL = 3600    # 缓存有效期 1 小时（秒）
+_MAX_RETRIES = 5     # 限流时最大重试次数
+_RETRY_BASE_DELAY = 4  # 重试基础等待秒数
 _last_request_ts = 0.0  # 上次 yfinance 请求时间戳
 _request_lock = threading.Lock()
-_MIN_REQUEST_INTERVAL = 1.5  # 两次 yfinance 请求最小间隔（秒）
+_MIN_REQUEST_INTERVAL = 3.0  # 两次 yfinance 请求最小间隔（秒）
+_STALE_CACHE_TTL = 7200  # 过期缓存在限流时可用的最大年龄（秒）
 
 
 def _cache_key(symbol: str) -> str:
@@ -59,22 +60,21 @@ def _rate_limit_wait():
 
 def fetch_yf_data(symbol: str, period: str = "6mo"):
     """
-    带 缓存 + 重试 + 限速 的 yfinance 数据获取
+    带 缓存 + 重试 + 限速 + stale-while-revalidate 的 yfinance 数据获取
 
     返回: (ticker_info, history_dataframe)
-    如果全部重试失败，抛出最后的异常
+    如果全部重试失败且有过期缓存，返回过期缓存（降级）
+    如果既无缓存也无数据，抛出最后的异常
     """
     key = _cache_key(symbol)
     now = time.time()
 
-    # 1. 先查缓存
+    # 1. 先查缓存（有效缓存直接返回）
     with _yf_cache_lock:
         if key in _yf_cache:
             cached = _yf_cache[key]
             if now - cached["ts"] < _CACHE_TTL:
                 return cached["info"], cached["data"].copy()
-            else:
-                del _yf_cache[key]
 
     # 2. 限速等待 + 请求 + 重试
     last_exc = None
@@ -86,6 +86,10 @@ def fetch_yf_data(symbol: str, period: str = "6mo"):
             data = ticker.history(period=period)
 
             if data.empty:
+                # 数据为空但没报错，检查是否有过期缓存兜底
+                with _yf_cache_lock:
+                    if key in _yf_cache:
+                        return _yf_cache[key]["info"], _yf_cache[key]["data"].copy()
                 return info, data
 
             # 写入缓存
@@ -100,10 +104,24 @@ def fetch_yf_data(symbol: str, period: str = "6mo"):
         except Exception as e:
             last_exc = e
             if _is_rate_limit_error(e) and attempt < _MAX_RETRIES - 1:
-                delay = _RETRY_BASE_DELAY * (2 ** attempt)  # 2s, 4s, 8s
+                delay = _RETRY_BASE_DELAY * (2 ** attempt)  # 4s, 8s, 16s, 32s
                 time.sleep(delay)
             else:
+                # 最后一次重试也失败了，检查过期缓存兜底
+                with _yf_cache_lock:
+                    if key in _yf_cache:
+                        stale = _yf_cache[key]
+                        if now - stale["ts"] < _STALE_CACHE_TTL:
+                            # 返回过期缓存作为降级数据
+                            return stale["info"], stale["data"].copy()
                 raise
+
+    # 所有重试耗尽，最后查一次过期缓存
+    with _yf_cache_lock:
+        if key in _yf_cache:
+            stale = _yf_cache[key]
+            if now - stale["ts"] < _STALE_CACHE_TTL:
+                return stale["info"], stale["data"].copy()
 
     raise last_exc
 
