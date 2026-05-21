@@ -1697,6 +1697,29 @@ async def ganzhi_map(
         # ===== 月相 =====
         "lunar_day": lunar_day,
         "moon_phase": moon_phase,
+
+        # ===== 预格式化输出（Agent直接复制粘贴，禁止修改） =====
+        "formatted_shengke": (
+            f"【五行生克分析（娱乐）】\n"
+            f"基于日柱天干{day_gan}（{day_wuxing}行）的五行生克关系：\n"
+            f"- 旺行（{shengke['旺行']}）：{wang_red}\n"
+            f"- 生我行（{shengke['生我行']}→{shengke['旺行']}）：{sheng_wo_red}\n"
+            f"- 我生行·泄（{shengke['旺行']}→{shengke['我生行(泄)']}）：{wo_sheng_red}\n"
+            f"- 克我行（{shengke['克我行']}→{shengke['旺行']}）：{ke_wo_red}\n"
+            f"- 我克行（{shengke['旺行']}→{shengke['我克行']}）：{wo_ke_red}"
+        ),
+        "formatted_sun_moon": (
+            f"【日月水火分析（娱乐）】\n"
+            f"- 日·太阳（{_SUN_MOON_MAP['日']['desc']}）：红球 {_fmt(_SUN_MOON_MAP['日']['red_balls'])} ｜蓝球 {_fmt(_SUN_MOON_MAP['日']['blue_balls'])}\n"
+            f"- 月·太阴（{_SUN_MOON_MAP['月']['desc']}）：红球 {_fmt(_SUN_MOON_MAP['月']['red_balls'])} ｜蓝球 {_fmt(_SUN_MOON_MAP['月']['blue_balls'])}\n"
+            f"- 水·坎卦（{_SUN_MOON_MAP['水']['desc']}）：红球 {_fmt(_SUN_MOON_MAP['水']['red_balls'])} ｜蓝球 {_fmt(_SUN_MOON_MAP['水']['blue_balls'])}\n"
+            f"- 火·离卦（{_SUN_MOON_MAP['火']['desc']}）：红球 {_fmt(_SUN_MOON_MAP['火']['red_balls'])} ｜蓝球 {_fmt(_SUN_MOON_MAP['火']['blue_balls'])}"
+        ),
+        "formatted_moon_phase": (
+            f"【月相分析（娱乐）】\n"
+            f"- 今日阴历日数：{lunar_day}\n"
+            f"- 今日月相：{moon_phase}"
+        ),
     }
 
     return result
