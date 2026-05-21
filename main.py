@@ -6,6 +6,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Optional
 import time
+import json
 import threading
 
 app = FastAPI(
@@ -788,8 +789,8 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us"):
             "market": market,
             "total": len(results),
             "success": len(valid_results),
-            "summary": summary,
-            "stocks": results,
+            "stocks_text": json.dumps(results, ensure_ascii=False),
+            "summary_text": json.dumps(summary, ensure_ascii=False),
             "analysis_time": datetime.now().isoformat()
         }
 
