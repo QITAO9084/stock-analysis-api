@@ -2236,7 +2236,10 @@ async def ssq_history(limit: int = 30):
     if not _SSQ_HISTORY:
         raise HTTPException(status_code=503, detail="历史数据未加载")
     limit = min(limit, 200)
-    return {"total": len(_SSQ_HISTORY), "data": _SSQ_HISTORY[:limit]}
+    return {
+        "total": str(len(_SSQ_HISTORY)),
+        "data": json.dumps(_SSQ_HISTORY[:limit], ensure_ascii=False)
+    }
 
 
 @app.get("/ssq/analysis", tags=["双色球历史数据"])
