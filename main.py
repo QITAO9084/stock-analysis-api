@@ -2440,7 +2440,7 @@ async def ssq_analysis(periods: int = 50):
 
 
 @app.get("/ssq/backtest", tags=["双色球历史数据"])
-async def ssq_backtest(periods: int = 50, mode: str = "day_gan"):
+async def ssq_backtest(periods: int = 200, mode: str = "day_gan"):
     """
     双色球玄学维度回测验证
 
@@ -2466,7 +2466,6 @@ async def ssq_backtest(periods: int = 50, mode: str = "day_gan"):
         "克我行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "我克行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "纳音五行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
-        "日月": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "月相": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "六柱干支": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "飞星方位": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
@@ -2579,11 +2578,6 @@ async def ssq_backtest(periods: int = 50, mode: str = "day_gan"):
                         set(_WUXING_MAP[nayin_wuxing]["red_balls"]),
                         set(_WUXING_MAP[nayin_wuxing]["blue_balls"]))
 
-        # 日月
-        _count_dim("日月",
-                    set(_SUN_MOON_MAP["日"]["red_balls"] + _SUN_MOON_MAP["月"]["red_balls"]),
-                    set(_SUN_MOON_MAP["日"]["blue_balls"] + _SUN_MOON_MAP["月"]["blue_balls"]))
-
         # 月相
         if moon_phase and moon_phase in _MOON_PHASE_RED:
             _count_dim("月相",
@@ -2683,7 +2677,7 @@ async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5):
     - **count**: 生成几注，默认5，最大10
 
     选号逻辑：
-    1. 玄学有效维度（六柱干支/生我行/纳音五行）缩范围 → 红球候选池
+    1. 玄学有效维度（六柱干支/生我行/纳音五行/飞星，日月已移除-负面）缩范围 → 红球候选池
     2. 历史统计（频率/遗漏/冷热）二次筛选 → 加权排序
     3. 约束条件（和值/奇偶/大小/区间）优化组合
     4. 蓝球独立选号（玄学蓝球+统计蓝球融合）
@@ -2748,8 +2742,8 @@ async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5):
 
     shengke = _get_shengke_info(day_wuxing)
 
-    # 玄学红球候选池（基于回测有效维度）
-    # 权重基于129期回测提升值：六柱干支+15.05%，生我行+6.57%，纳音五行+5.53%
+    # 玄学红球候选池（基于回测有效维度，日月已移除-负面）
+    # 权重基于2144期回测提升值：六柱干支+15.05%，生我行+6.57%，纳音五行+5.53%
     xuanxue_red_score = {}
     xuanxue_blue_score = {}
 
