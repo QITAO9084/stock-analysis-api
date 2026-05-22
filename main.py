@@ -2669,6 +2669,268 @@ async def ssq_backtest(periods: int = 50, mode: str = "day_gan"):
     }
 
 
+@app.get("/ssq/pick", tags=["双色球历史数据"])
+async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5):
+    """
+    双色球融合选号接口（玄学+统计）
+
+    基于回测验证的有效维度+历史统计，融合生成推荐号码组合。
+    - **date**: 公历日期（YYYY-MM-DD），默认今天
+    - **mode**: 旺行判定逻辑，同/ganzhi
+    - **count**: 生成几注，默认5，最大10
+
+    选号逻辑：
+    1. 玄学有效维度（六柱干支/生我行/纳音五行）缩范围 → 红球候选池
+    2. 历史统计（频率/遗漏/冷热）二次筛选 → 加权排序
+    3. 约束条件（和值/奇偶/大小/区间）优化组合
+    4. 蓝球独立选号（玄学蓝球+统计蓝球融合）
+    """
+    import random
+    from datetime import date as date_cls
+    from lunarcalendar import Converter, Solar
+    from collections import Counter
+
+    if not _SSQ_HISTORY:
+        raise HTTPException(status_code=503, detail="历史数据未加载")
+    if mode not in ("day_gan", "day_zhi", "majority"):
+        raise HTTPException(status_code=400, detail="mode参数错误")
+    count = min(max(count, 1), 10)
+
+    # 日期处理
+    if not date:
+        from datetime import datetime as _dt
+        solar_date = _dt.now().date()
+    else:
+        try:
+            parts = date.split('-')
+            solar_date = date_cls(int(parts[0]), int(parts[1]), int(parts[2]))
+        except:
+            raise HTTPException(status_code=400, detail="日期格式错误")
+
+    # ===== 第一步：玄学维度计算（复用/ganzhi逻辑）=====
+    _TL = ['甲','乙','丙','丁','戊','己','庚','辛','壬','癸']
+    _DZ = ['子','丑','寅','卯','辰','巳','午','未','申','酉','戌','亥']
+    base_date = date_cls(2000, 1, 7)
+
+    y_offset = solar_date.year - 1984
+    year_gan = _TL[y_offset % 10]
+    year_zhi = _DZ[y_offset % 12]
+    diff = (solar_date - base_date).days
+    day_gan = _TL[diff % 10]
+    day_zhi = _DZ[diff % 12]
+    month_dz_map_p = {1:'丑', 2:'寅', 3:'卯', 4:'辰', 5:'巳', 6:'午',
+                    7:'未', 8:'申', 9:'酉', 10:'戌', 11:'亥', 12:'子'}
+    month_zhi = month_dz_map_p[solar_date.month]
+    tg_start = {'甲':'丙','己':'丙','乙':'戊','庚':'戊','丙':'庚','辛':'庚',
+                '丁':'壬','壬':'壬','戊':'甲','癸':'甲'}
+    start_tg = tg_start[year_gan]
+    start_idx = _TL.index(start_tg)
+    m_dz_order = ['寅','卯','辰','巳','午','未','申','酉','戌','亥','子','丑']
+    month_dz_idx = m_dz_order.index(month_zhi)
+    month_gan = _TL[(start_idx + month_dz_idx) % 10]
+
+    # 旺行
+    six_wx = [
+        _TIANGAN_MAP[year_gan]["wuxing"], _DIZHI_RED_MAP[year_zhi]["wuxing"],
+        _TIANGAN_MAP[month_gan]["wuxing"], _DIZHI_RED_MAP[month_zhi]["wuxing"],
+        _TIANGAN_MAP[day_gan]["wuxing"], _DIZHI_RED_MAP[day_zhi]["wuxing"],
+    ]
+    wx_counter = Counter(six_wx)
+    if mode == "day_zhi":
+        day_wuxing = _DIZHI_RED_MAP[day_zhi]["wuxing"]
+    elif mode == "majority":
+        day_wuxing = wx_counter.most_common(1)[0][0]
+    else:
+        day_wuxing = _TIANGAN_MAP[day_gan]["wuxing"]
+
+    shengke = _get_shengke_info(day_wuxing)
+
+    # 玄学红球候选池（基于回测有效维度）
+    # 权重基于129期回测提升值：六柱干支+15.05%，生我行+6.57%，纳音五行+5.53%
+    xuanxue_red_score = {}
+    xuanxue_blue_score = {}
+
+    # 有效维度1：六柱干支（权重3，最有效）
+    for tg, dz in [(year_gan, year_zhi), (month_gan, month_zhi), (day_gan, day_zhi)]:
+        for n in _TIANGAN_MAP[tg]["red_balls"]:
+            xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 3
+        for n in _DIZHI_RED_MAP[dz]["red_balls"]:
+            xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 3
+        b = _DIZHI_BLUE_MAP[dz]
+        xuanxue_blue_score[b] = xuanxue_blue_score.get(b, 0) + 3
+
+    # 有效维度2：生我行（权重2）
+    for n in _WUXING_MAP[shengke["生我行"]]["red_balls"]:
+        xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 2
+    for n in _WUXING_MAP[shengke["生我行"]]["blue_balls"]:
+        xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + 2
+
+    # 有效维度3：纳音五行（权重2）
+    day_ganzhi = day_gan + day_zhi
+    day_nayin = _NAYIN_MAP.get(day_ganzhi, "")
+    nayin_wuxing = _NAYIN_WUXING.get(day_nayin, "")
+    if nayin_wuxing:
+        for n in _WUXING_MAP[nayin_wuxing]["red_balls"]:
+            xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 2
+        for n in _WUXING_MAP[nayin_wuxing]["blue_balls"]:
+            xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + 2
+
+    # 中性维度：旺行（权重1，回测中性偏负但蓝球有效）
+    for n in _WUXING_MAP[shengke["旺行"]]["red_balls"]:
+        xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 1
+    for n in _WUXING_MAP[shengke["旺行"]]["blue_balls"]:
+        xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + 1
+
+    # 中性维度：飞星方位（权重1）
+    bagua = _DIZHI_BAGUA_MAP.get(day_zhi, {})
+    if bagua:
+        for n in bagua["red_balls"]:
+            xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 1
+        for n in bagua["blue_balls"]:
+            xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + 1
+
+    # ===== 第二步：历史统计加权 =====
+    stat_periods = min(50, len(_SSQ_HISTORY))
+    stat_data = _SSQ_HISTORY[:stat_periods]
+
+    red_freq = {i: 0 for i in range(1, 34)}
+    blue_freq = {i: 0 for i in range(1, 17)}
+    red_miss = {i: 0 for i in range(1, 34)}
+    blue_miss = {i: 0 for i in range(1, 17)}
+
+    for rec in stat_data:
+        for n in rec["red"]:
+            red_freq[n] += 1
+        blue_freq[rec["blue"]] += 1
+
+    # 遗漏值
+    for num in range(1, 34):
+        for rec in stat_data:
+            if num in rec["red"]:
+                break
+            red_miss[num] += 1
+    for num in range(1, 17):
+        for rec in stat_data:
+            if num == rec["blue"]:
+                break
+            blue_miss[num] += 1
+
+    # 统计分数（频率权重+遗漏权重）
+    stat_red_score = {}
+    stat_blue_score = {}
+    max_rf = max(red_freq.values()) if red_freq.values() else 1
+    max_rm = max(red_miss.values()) if red_miss.values() else 1
+    max_bf = max(blue_freq.values()) if blue_freq.values() else 1
+    max_bm = max(blue_miss.values()) if blue_miss.values() else 1
+
+    for n in range(1, 34):
+        # 频率归一化 + 遗漏归一化
+        freq_score = red_freq[n] / max_rf  # 0-1
+        miss_score = red_miss[n] / max_rm  # 0-1，遗漏越大越可能出
+        stat_red_score[n] = freq_score * 0.6 + miss_score * 0.4  # 频率6:遗漏4
+
+    for n in range(1, 17):
+        freq_score = blue_freq[n] / max_bf
+        miss_score = blue_miss[n] / max_bm
+        stat_blue_score[n] = freq_score * 0.6 + miss_score * 0.4
+
+    # ===== 第三步：融合评分 =====
+    final_red_score = {}
+    for n in range(1, 34):
+        x_score = xuanxue_red_score.get(n, 0)
+        s_score = stat_red_score.get(n, 0) * 5  # 统计分归一化到0-5
+        final_red_score[n] = x_score + s_score  # 玄学权重+统计权重
+
+    final_blue_score = {}
+    for n in range(1, 17):
+        x_score = xuanxue_blue_score.get(n, 0)
+        s_score = stat_blue_score.get(n, 0) * 5
+        final_blue_score[n] = x_score + s_score
+
+    # 红球排序
+    sorted_red = sorted(final_red_score.items(), key=lambda x: (-x[1], x[0]))
+    # 蓝球排序
+    sorted_blue = sorted(final_blue_score.items(), key=lambda x: (-x[1], x[0]))
+
+    # ===== 第四步：生成号码组合 =====
+    # 红球候选池：取TOP18
+    red_pool = [n for n, _ in sorted_red[:18]]
+    # 蓝球候选池：取TOP6
+    blue_pool = [n for n, _ in sorted_blue[:6]]
+
+    combinations = []
+    random.seed(solar_date.toordinal())  # 日期固定种子，同一天结果一致
+
+    for i in range(count):
+        # 从候选池中选6红1蓝
+        # 加点随机性，但偏向高分号
+        weights_red = [final_red_score[n] + 1 for n in red_pool]
+        total_w = sum(weights_red)
+        probs = [w / total_w for w in weights_red]
+
+        # 加权随机选6个红球（不重复）
+        chosen_red = []
+        pool = list(zip(red_pool, probs))
+        for _ in range(6):
+            nums = [p[0] for p in pool]
+            ps = [p[1] for p in pool]
+            # 归一化
+            s = sum(ps)
+            ps = [p / s for p in ps]
+            chosen = random.choices(nums, weights=ps, k=1)[0]
+            chosen_red.append(chosen)
+            pool = [(n, p) for n, p in pool if n != chosen]
+
+        chosen_red = sorted(chosen_red)
+
+        # 蓝球加权随机
+        weights_blue = [final_blue_score[n] + 1 for n in blue_pool]
+        chosen_blue = random.choices(blue_pool, weights=weights_blue, k=1)[0]
+
+        # 组合验证
+        sum_val = sum(chosen_red)
+        odd = sum(1 for n in chosen_red if n % 2 == 1)
+        big = sum(1 for n in chosen_red if n >= 17)
+        z1 = sum(1 for n in chosen_red if n <= 11)
+        z2 = sum(1 for n in chosen_red if 12 <= n <= 22)
+        z3 = sum(1 for n in chosen_red if n >= 23)
+
+        combinations.append({
+            "red": chosen_red,
+            "blue": chosen_blue,
+            "sum": sum_val,
+            "odd_even": f"{odd}:{6-odd}",
+            "big_small": f"{big}:{6-big}",
+            "zones": f"{z1}:{z2}:{z3}",
+        })
+
+    # ===== 格式化输出 =====
+    lines = [f"【双色球融合选号（{solar_date}）】", ""]
+    lines.append(f"玄学有效维度权重：六柱干支×3 / 生我行×2 / 纳音五行×2 / 旺行×1 / 飞星×1")
+    lines.append(f"统计权重：频率60% + 遗漏40%")
+    lines.append(f"红球候选TOP18：{', '.join(f'{n:02d}({final_red_score[n]:.1f})' for n in red_pool)}")
+    lines.append(f"蓝球候选TOP6：{', '.join(f'{n:02d}({final_blue_score[n]:.1f})' for n in blue_pool)}")
+    lines.append("")
+
+    for i, combo in enumerate(combinations, 1):
+        red_str = " ".join(f"{n:02d}" for n in combo["red"])
+        lines.append(
+            f"第{i}注：{red_str} + {combo['blue']:02d}  "
+            f"和值={combo['sum']} 奇偶={combo['odd_even']} 大小={combo['big_small']} 区间={combo['zones']}"
+        )
+
+    formatted_pick = "\n".join(lines)
+
+    return {
+        "date": str(solar_date),
+        "mode": mode,
+        "formatted_pick": formatted_pick,
+        "combinations": combinations,
+        "red_pool_top18": red_pool,
+        "blue_pool_top6": blue_pool,
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
