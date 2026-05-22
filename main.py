@@ -2215,6 +2215,227 @@ async def ganzhi_map(
     return result
 
 
+# ===== 双色球历史开奖数据+统计分析 =====
+
+# 加载历史数据
+import os as _os
+_ssq_history_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "ssq_history.json")
+_SSQ_HISTORY = []
+if _os.path.exists(_ssq_history_path):
+    with open(_ssq_history_path, "r", encoding="utf-8") as _f:
+        _SSQ_HISTORY = json.load(_f)
+
+
+@app.get("/ssq/history", tags=["双色球历史数据"])
+async def ssq_history(limit: int = 30):
+    """
+    双色球历史开奖数据查询
+
+    - **limit**: 返回最近N期数据，默认30，最大200
+    """
+    if not _SSQ_HISTORY:
+        raise HTTPException(status_code=503, detail="历史数据未加载")
+    limit = min(limit, 200)
+    return {"total": len(_SSQ_HISTORY), "data": _SSQ_HISTORY[:limit]}
+
+
+@app.get("/ssq/analysis", tags=["双色球历史数据"])
+async def ssq_analysis(periods: int = 50):
+    """
+    双色球基础统计分析
+
+    - **periods**: 分析最近N期数据，默认50，最大200
+
+    返回：号码频率、遗漏值、冷热号、和值分布、奇偶比、大小比、区间分布
+    """
+    if not _SSQ_HISTORY:
+        raise HTTPException(status_code=503, detail="历史数据未加载")
+    periods = min(periods, len(_SSQ_HISTORY))
+    data = _SSQ_HISTORY[:periods]
+
+    # ===== 1. 号码频率统计 =====
+    red_freq = {i: 0 for i in range(1, 34)}
+    blue_freq = {i: 0 for i in range(1, 17)}
+
+    for rec in data:
+        for n in rec["red"]:
+            red_freq[n] += 1
+        blue_freq[rec["blue"]] += 1
+
+    # 红球频率排名
+    red_freq_sorted = sorted(red_freq.items(), key=lambda x: (-x[1], x[0]))
+    # 蓝球频率排名
+    blue_freq_sorted = sorted(blue_freq.items(), key=lambda x: (-x[1], x[0]))
+
+    # ===== 2. 遗漏值（当前连续未出期数） =====
+    red_miss = {i: 0 for i in range(1, 34)}
+    blue_miss = {i: 0 for i in range(1, 17)}
+
+    for num in range(1, 34):
+        for rec in data:
+            if num in rec["red"]:
+                break
+            red_miss[num] += 1
+
+    for num in range(1, 17):
+        for rec in data:
+            if num == rec["blue"]:
+                break
+            blue_miss[num] += 1
+
+    # 遗漏排名
+    red_miss_sorted = sorted(red_miss.items(), key=lambda x: (-x[1], x[0]))
+    blue_miss_sorted = sorted(blue_miss.items(), key=lambda x: (-x[1], x[0]))
+
+    # ===== 3. 冷热号（近N期） =====
+    avg_red = periods * 6 / 33
+    avg_blue = periods / 16
+
+    def _red_temp(freq):
+        if freq >= avg_red * 1.5:
+            return "🔥热"
+        elif freq <= avg_red * 0.5:
+            return "❄️冷"
+        else:
+            return "📐温"
+
+    def _blue_temp(freq):
+        if freq >= avg_blue * 1.5:
+            return "🔥热"
+        elif freq <= avg_blue * 0.5:
+            return "❄️冷"
+        else:
+            return "📐温"
+
+    red_temp = {n: _red_freq for n, _red_freq in red_freq.items()}
+    blue_temp = {n: _blue_freq for n, _blue_freq in blue_freq.items()}
+
+    # ===== 4. 和值统计 =====
+    sum_values = [sum(rec["red"]) for rec in data]
+    avg_sum = round(sum(sum_values) / len(sum_values), 1)
+    min_sum = min(sum_values)
+    max_sum = max(sum_values)
+
+    # 和值区间分布
+    sum_ranges = {"21-60": 0, "61-100": 0, "101-140": 0, "141-183": 0}
+    for s in sum_values:
+        if s <= 60:
+            sum_ranges["21-60"] += 1
+        elif s <= 100:
+            sum_ranges["61-100"] += 1
+        elif s <= 140:
+            sum_ranges["101-140"] += 1
+        else:
+            sum_ranges["141-183"] += 1
+
+    # ===== 5. 奇偶比 =====
+    odd_even_counts = {}
+    for rec in data:
+        odd = sum(1 for n in rec["red"] if n % 2 == 1)
+        even = 6 - odd
+        ratio = f"{odd}:{even}"
+        odd_even_counts[ratio] = odd_even_counts.get(ratio, 0) + 1
+    odd_even_sorted = sorted(odd_even_counts.items(), key=lambda x: (-x[1], x[0]))
+
+    # ===== 6. 大小比（1-16小，17-33大） =====
+    big_small_counts = {}
+    for rec in data:
+        big = sum(1 for n in rec["red"] if n >= 17)
+        small = 6 - big
+        ratio = f"{big}:{small}"
+        big_small_counts[ratio] = big_small_counts.get(ratio, 0) + 1
+    big_small_sorted = sorted(big_small_counts.items(), key=lambda x: (-x[1], x[0]))
+
+    # ===== 7. 区间分布（1-11/12-22/23-33） =====
+    zone_counts = {"一区(01-11)": 0, "二区(12-22)": 0, "三区(23-33)": 0}
+    for rec in data:
+        for n in rec["red"]:
+            if n <= 11:
+                zone_counts["一区(01-11)"] += 1
+            elif n <= 22:
+                zone_counts["二区(12-22)"] += 1
+            else:
+                zone_counts["三区(23-33)"] += 1
+
+    # ===== 8. 连号统计 =====
+    cons_count = 0
+    for rec in data:
+        r = sorted(rec["red"])
+        for i in range(len(r) - 1):
+            if r[i + 1] - r[i] == 1:
+                cons_count += 1
+                break
+    cons_ratio = round(cons_count / len(data) * 100, 1)
+
+    # ===== 9. 重号统计（与上一期重复） =====
+    repeat_count = 0
+    repeat_detail = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
+    for i in range(len(data) - 1):
+        cur = set(data[i]["red"])
+        prev = set(data[i + 1]["red"])
+        overlap = len(cur & prev)
+        repeat_count += overlap
+        if overlap in repeat_detail:
+            repeat_detail[overlap] += 1
+        elif overlap > 4:
+            repeat_detail[4] += 1
+    avg_repeat = round(repeat_count / max(len(data) - 1, 1), 2)
+
+    # ===== 格式化输出 =====
+    # 红球频率TOP10
+    red_freq_top10 = "  ".join([f"{n:02d}({c}次)" for n, c in red_freq_sorted[:10]])
+    # 红球频率BOTTOM10
+    red_freq_bot10 = "  ".join([f"{n:02d}({c}次)" for n, c in red_freq_sorted[-10:]])
+    # 蓝球频率TOP5
+    blue_freq_top5 = "  ".join([f"{n:02d}({c}次)" for n, c in blue_freq_sorted[:5]])
+    # 红球遗漏TOP10
+    red_miss_top10 = "  ".join([f"{n:02d}({c}期)" for n, c in red_miss_sorted[:10]])
+    # 蓝球遗漏TOP5
+    blue_miss_top5 = "  ".join([f"{n:02d}({c}期)" for n, c in blue_miss_sorted[:5]])
+
+    # 冷热号列表
+    hot_red = sorted([n for n, f in red_freq.items() if f >= avg_red * 1.5])
+    cold_red = sorted([n for n, f in red_freq.items() if f <= avg_red * 0.5])
+    hot_blue = sorted([n for n, f in blue_freq.items() if f >= avg_blue * 1.5])
+    cold_blue = sorted([n for n, f in blue_freq.items() if f <= avg_blue * 0.5])
+
+    formatted_analysis = (
+        f"【双色球基础统计分析（近{periods}期）】\n\n"
+        f"📊 红球频率TOP10：{red_freq_top10}\n"
+        f"📊 红球频率BOTTOM10：{red_freq_bot10}\n"
+        f"📊 蓝球频率TOP5：{blue_freq_top5}\n\n"
+        f"⏳ 红球遗漏TOP10：{red_miss_top10}\n"
+        f"⏳ 蓝球遗漏TOP5：{blue_miss_top5}\n\n"
+        f"🔥 红球热号：{', '.join(f'{n:02d}' for n in hot_red) if hot_red else '无'}\n"
+        f"❄️ 红球冷号：{', '.join(f'{n:02d}' for n in cold_red) if cold_red else '无'}\n"
+        f"🔥 蓝球热号：{', '.join(f'{n:02d}' for n in hot_blue) if hot_blue else '无'}\n"
+        f"❄️ 蓝球冷号：{', '.join(f'{n:02d}' for n in cold_blue) if cold_blue else '无'}\n\n"
+        f"📈 和值范围：{min_sum}~{max_sum}，平均{avg_sum}\n"
+        f"📈 和值分布：21-60({sum_ranges['21-60']}期) 61-100({sum_ranges['61-100']}期) "
+        f"101-140({sum_ranges['101-140']}期) 141-183({sum_ranges['141-183']}期)\n\n"
+        f"⚖️ 奇偶比分布：{'  '.join([f'{r}({c}期)' for r, c in odd_even_sorted[:5]])}\n"
+        f"⚖️ 大小比分布：{'  '.join([f'{r}({c}期)' for r, c in big_small_sorted[:5]])}\n\n"
+        f"🗺️ 区间分布：{'  '.join([f'{k}({v}个)' for k, v in zone_counts.items()])}\n\n"
+        f"🔗 连号出现率：{cons_ratio}%\n"
+        f"🔄 重号平均：{avg_repeat}个/期，分布：{'  '.join([f'{k}个({v}期)' for k, v in sorted(repeat_detail.items()) if v > 0])}"
+    )
+
+    return {
+        "periods_analyzed": periods,
+        "date_range": f"{data[-1]['date']} ~ {data[0]['date']}" if data else "",
+        "formatted_analysis": formatted_analysis,
+        # 结构化数据（供程序调用）
+        "red_freq": {str(k): v for k, v in sorted(red_freq.items())},
+        "blue_freq": {str(k): v for k, v in sorted(blue_freq.items())},
+        "red_miss": {str(k): v for k, v in sorted(red_miss.items())},
+        "blue_miss": {str(k): v for k, v in sorted(blue_miss.items())},
+        "avg_sum": avg_sum,
+        "sum_range": [min_sum, max_sum],
+        "consecutive_ratio": cons_ratio,
+        "avg_repeat": avg_repeat,
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
