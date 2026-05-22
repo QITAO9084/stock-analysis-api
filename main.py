@@ -1604,6 +1604,100 @@ _MOON_PHASE_LUCK = {
     "晦": "🌑 极暗期·最弱之时·蓝球取极小号",
 }
 
+# ===== v3.0 新增常量 =====
+
+# 六十甲子纳音五行映射
+_NAYIN_MAP = {
+    "甲子": "海中金", "乙丑": "海中金", "丙寅": "炉中火", "丁卯": "炉中火",
+    "戊辰": "大林木", "己巳": "大林木", "庚午": "路旁土", "辛未": "路旁土",
+    "壬申": "剑锋金", "癸酉": "剑锋金", "甲戌": "山头火", "乙亥": "山头火",
+    "丙子": "涧下水", "丁丑": "涧下水", "戊寅": "城头土", "己卯": "城头土",
+    "庚辰": "白蜡金", "辛巳": "白蜡金", "壬午": "杨柳木", "癸未": "杨柳木",
+    "甲申": "泉中水", "乙酉": "泉中水", "丙戌": "屋上土", "丁亥": "屋上土",
+    "戊子": "霹雳火", "己丑": "霹雳火", "庚寅": "松柏木", "辛卯": "松柏木",
+    "壬辰": "长流水", "癸巳": "长流水", "甲午": "沙中金", "乙未": "沙中金",
+    "丙申": "山下火", "丁酉": "山下火", "戊戌": "平地木", "己亥": "平地木",
+    "庚子": "壁上土", "辛丑": "壁上土", "壬寅": "金箔金", "癸卯": "金箔金",
+    "甲辰": "覆灯火", "乙巳": "覆灯火", "丙午": "天河水", "丁未": "天河水",
+    "戊申": "大驿土", "己酉": "大驿土", "庚戌": "钗钏金", "辛亥": "钗钏金",
+    "壬子": "桑柘木", "癸丑": "桑柘木", "甲寅": "大溪水", "乙卯": "大溪水",
+    "丙辰": "沙中土", "丁巳": "沙中土", "戊午": "天上火", "己未": "天上火",
+    "庚申": "石榴木", "辛酉": "石榴木", "壬戌": "大海水", "癸亥": "大海水",
+}
+
+# 纳音五行提取（从纳音名称中提取五行属性）
+_NAYIN_WUXING = {
+    "海中金": "金", "炉中火": "火", "大林木": "木", "路旁土": "土", "剑锋金": "金",
+    "山头火": "火", "涧下水": "水", "城头土": "土", "白蜡金": "金", "杨柳木": "木",
+    "泉中水": "水", "屋上土": "土", "霹雳火": "火", "松柏木": "木", "长流水": "水",
+    "沙中金": "金", "山下火": "火", "平地木": "木", "壁上土": "土", "金箔金": "金",
+    "覆灯火": "火", "天河水": "水", "大驿土": "土", "钗钏金": "金", "桑柘木": "木",
+    "大溪水": "水", "沙中土": "土", "天上火": "火", "石榴木": "木", "大海水": "水",
+}
+
+# 九宫飞星号码映射（每宫映射3个红球+1个蓝球）
+# 按洛书九宫：1坎北、2坤西南、3震东、4巽东南、5中宫、6乾西北、7兑西、8艮东北、9离南
+_JIUGONG_MAP = {
+    1: {"name": "坎·北方", "red_balls": [1, 11, 21], "blue_balls": [1]},
+    2: {"name": "坤·西南", "red_balls": [2, 12, 22], "blue_balls": [2]},
+    3: {"name": "震·东方", "red_balls": [3, 13, 23], "blue_balls": [3]},
+    4: {"name": "巽·东南", "red_balls": [4, 14, 24], "blue_balls": [4]},
+    5: {"name": "中宫", "red_balls": [5, 15, 25], "blue_balls": [5]},
+    6: {"name": "乾·西北", "red_balls": [6, 16, 26], "blue_balls": [6]},
+    7: {"name": "兑·西方", "red_balls": [7, 17, 27], "blue_balls": [7]},
+    8: {"name": "艮·东北", "red_balls": [8, 18, 28], "blue_balls": [8]},
+    9: {"name": "离·南方", "red_balls": [9, 19, 29], "blue_balls": [9]},
+}
+
+# 飞星顺飞路径（中宫→乾→兑→艮→离→坎→坤→震→巽，即5→6→7→8→9→1→2→3→4）
+_FEIXING_ORDER = [5, 6, 7, 8, 9, 1, 2, 3, 4]
+
+# 飞星名称：1白、2黑、3碧、4绿、5黄、6白、7赤、8白、9紫
+_FEIXING_NAMES = {
+    1: "一白", 2: "二黑", 3: "三碧", 4: "四绿", 5: "五黄",
+    6: "六白", 7: "七赤", 8: "八白", 9: "九紫",
+}
+
+# 年飞星入中宫计算：2024年=3碧入中，每减1年飞星+1（模9，0=9）
+# 2024=3, 2025=2, 2026=1, 2027=9, 2028=8...
+def _get_year_feixing(year: int) -> int:
+    """计算年飞星入中宫的数字（1-9）"""
+    # 公式：(11 - (year % 9)) % 9，0时取9
+    star = (11 - (year % 9)) % 9
+    return star if star != 0 else 9
+
+# 地支→先天八卦方位映射
+_DIZHI_BAGUA_MAP = {
+    "子": {"gua": "坎", "fangwei": "北方", "red_balls": [1, 11, 21], "blue_balls": [1]},
+    "丑": {"gua": "艮", "fangwei": "东北", "red_balls": [8, 18, 28], "blue_balls": [8]},
+    "寅": {"gua": "艮", "fangwei": "东北", "red_balls": [8, 18, 28], "blue_balls": [8]},
+    "卯": {"gua": "震", "fangwei": "东方", "red_balls": [3, 13, 23], "blue_balls": [3]},
+    "辰": {"gua": "巽", "fangwei": "东南", "red_balls": [4, 14, 24], "blue_balls": [4]},
+    "巳": {"gua": "巽", "fangwei": "东南", "red_balls": [4, 14, 24], "blue_balls": [4]},
+    "午": {"gua": "离", "fangwei": "南方", "red_balls": [9, 19, 29], "blue_balls": [9]},
+    "未": {"gua": "坤", "fangwei": "西南", "red_balls": [2, 12, 22], "blue_balls": [2]},
+    "申": {"gua": "坤", "fangwei": "西南", "red_balls": [2, 12, 22], "blue_balls": [2]},
+    "酉": {"gua": "兑", "fangwei": "西方", "red_balls": [7, 17, 27], "blue_balls": [7]},
+    "戌": {"gua": "乾", "fangwei": "西北", "red_balls": [6, 16, 26], "blue_balls": [6]},
+    "亥": {"gua": "乾", "fangwei": "西北", "red_balls": [6, 16, 26], "blue_balls": [6]},
+}
+
+# 时辰吉凶（纯娱乐）
+_HOUR_LUCK = {
+    "子": "🌃 夜半·阴极阳生·水行旺·蓝球偏小号",
+    "丑": "🐄 鸡鸣·阴退阳进·土行暗旺·偏中号",
+    "寅": "🐅 平旦·阳气初生·木行渐旺·偏大号",
+    "卯": "🐇 日出·木行正旺·红球偏木行",
+    "辰": "🐉 食时·土行旺·号码偏稳",
+    "巳": "🐍 隅中·火行渐旺·红球偏火行",
+    "午": "🐎 日中·火行极旺·旺行+火行优先",
+    "未": "🐑 日昳·土行旺·偏生我行号码",
+    "申": "🐒 晡时·金行渐旺·红球偏金行",
+    "酉": "🐓 日入·金行正旺·蓝球偏金行",
+    "戌": "🐕 黄昏·土行收·偏保守号码",
+    "亥": "🐷 人定·水行旺·蓝球偏水行",
+}
+
 
 def _fmt(nums: list) -> str:
     """格式化号码列表为逗号分隔字符串，两位补零"""
@@ -1629,18 +1723,17 @@ def _get_shengke_info(day_wuxing: str) -> dict:
 
 
 @app.get("/ganzhi", tags=["双色球玄学映射"])
-async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan"):
+async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_zhi: str = ""):
     """
     干支五行号码映射接口（按日期查询，专为Coze插件优化）
-
-    输入公历日期，API自动计算阴历和干支，返回预格式化文本。
-    v2.3：新增月相号码映射、旺行可选逻辑、号码热度汇总。
+    �3.0：新增六柱干支号码、九宫飞星、纳音五行、八卦方位、时辰分析、热度升级。
 
     - **date**: 公历日期（格式：YYYY-MM-DD）
     - **mode**: 旺行判定逻辑，可选：
       - day_gan（默认）：日柱天干五行
       - day_zhi：日柱地支五行
       - majority：六柱综合众数
+    - **hour_zhi**: 可选时辰地支（子/丑/寅/卯/辰/巳/午/未/申/酉/戌/亥），传入则输出时辰分析
     """
     try:
         parts = date.split('-')
@@ -1651,6 +1744,10 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan"):
 
     if mode not in ("day_gan", "day_zhi", "majority"):
         raise HTTPException(status_code=400, detail=f"mode参数错误，可选：day_gan / day_zhi / majority")
+
+    valid_zhi = ['子','丑','寅','卯','辰','巳','午','未','申','酉','戌','亥']
+    if hour_zhi and hour_zhi not in valid_zhi:
+        raise HTTPException(status_code=400, detail=f"hour_zhi参数错误，可选：子/丑/寅/卯/辰/巳/午/未/申/酉/戌/亥")
 
     try:
         from lunarcalendar import Converter, Solar
@@ -1730,65 +1827,208 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan"):
     moon_blue = _fmt(_MOON_PHASE_BLUE.get(moon_phase, [1]))
     moon_luck = _MOON_PHASE_LUCK.get(moon_phase, "")
 
-    # ===== P2: 号码热度汇总 =====
-    # 统计每个红球在旺行/生我/克我/日月/月相中出现的次数
-    red_heat = {}
-    for n in _WUXING_MAP[shengke["旺行"]]["red_balls"]:
-        red_heat[n] = red_heat.get(n, 0) + 2  # 旺行权重×2
-    for n in _WUXING_MAP[shengke["生我行"]]["red_balls"]:
-        red_heat[n] = red_heat.get(n, 0) + 1  # 生我行权重×1
-    for n in _SUN_MOON_MAP["日"]["red_balls"]:
-        red_heat[n] = red_heat.get(n, 0) + 1  # 日权重×1
-    for n in _SUN_MOON_MAP["月"]["red_balls"]:
-        red_heat[n] = red_heat.get(n, 0) + 1  # 月权重×1
-    for n in _MOON_PHASE_RED.get(moon_phase, []):
-        red_heat[n] = red_heat.get(n, 0) + 1  # 月相权重×1
+    # ===== v3.0 P0-1: 六柱干支直接号码映射 =====
+    liuzhu_parts = []
+    liuzhu_red_all = []  # 收集六柱所有红球用于热度
+    liuzhu_blue_all = []  # 收集六柱所有蓝球用于热度
+    for pillar_label, tg, dz in [
+        ("年柱", year_gan, year_zhi),
+        ("月柱", month_gan, month_zhi),
+        ("日柱", day_gan, day_zhi),
+    ]:
+        tg_red = _fmt(_TIANGAN_MAP[tg]["red_balls"])
+        dz_red = _fmt(_DIZHI_RED_MAP[dz]["red_balls"])
+        dz_blue = f"{_DIZHI_BLUE_MAP[dz]:02d}"
+        liuzhu_parts.append(
+            f"- {pillar_label} {tg}{dz}：{tg}→红球 {tg_red} ｜{dz}→红球 {dz_red} ｜蓝球 {dz_blue}"
+        )
+        liuzhu_red_all.extend(_TIANGAN_MAP[tg]["red_balls"])
+        liuzhu_red_all.extend(_DIZHI_RED_MAP[dz]["red_balls"])
+        liuzhu_blue_all.append(_DIZHI_BLUE_MAP[dz])
 
-    # 蓝球热度
+    formatted_liuzhu = (
+        f"【六柱干支号码映射（娱乐）】\n"
+        + "\n".join(liuzhu_parts)
+    )
+
+    # ===== v3.0 P0-2: 九宫飞星号码 =====
+    year_star = _get_year_feixing(solar_date.year)
+    # 飞星入中宫后，按洛书顺飞路径排列
+    # 宫位顺序：5(中宫)→6(乾)→7(兑)→8(艮)→9(离)→1(坎)→2(坤)→3(震)→4(巽)
+    _PALACE_ORDER = [5, 6, 7, 8, 9, 1, 2, 3, 4]
+    feixing_parts = []
+    feixing_red_all = []
+    feixing_blue_all = []
+    for i, palace in enumerate(_PALACE_ORDER):
+        flying_star = (year_star - 1 + i) % 9 + 1  # 从年飞星开始递增
+        palace_info = _JIUGONG_MAP[palace]
+        palace_name = palace_info["name"]
+        star_name = _FEIXING_NAMES.get(flying_star, f"{flying_star}")
+        red_str = _fmt(palace_info["red_balls"])
+        blue_str = _fmt(palace_info["blue_balls"])
+        feixing_parts.append(f"  {star_name}→{palace_name}：红球 {red_str} ｜蓝球 {blue_str}")
+        feixing_red_all.extend(palace_info["red_balls"])
+        feixing_blue_all.extend(palace_info["blue_balls"])
+
+    # 日支对应八卦方位
+    day_zhi_bagua = _DIZHI_BAGUA_MAP[day_zhi]
+
+    formatted_feixing = (
+        f"【九宫飞星号码（娱乐）】\n"
+        f"年飞星{year_star}入中宫，九宫飞星排列：\n"
+        + "\n".join(feixing_parts) + "\n"
+        f"\n日支{day_zhi}→{day_zhi_bagua['gua']}卦·{day_zhi_bagua['fangwei']}方："
+        f"红球 {_fmt(day_zhi_bagua['red_balls'])} ｜蓝球 {_fmt(day_zhi_bagua['blue_balls'])}"
+    )
+
+    # ===== v3.0 P1: 纳音五行号码 =====
+    day_ganzhi = day_gan + day_zhi
+    day_nayin = _NAYIN_MAP.get(day_ganzhi, "")
+    nayin_wuxing = _NAYIN_WUXING.get(day_nayin, "")
+    nayin_wuxing_label = f"{day_nayin}（{nayin_wuxing}行）" if day_nayin else "未知"
+    # 纳音与正五行冲突判定
+    nayin_conflict = False
+    if nayin_wuxing and nayin_wuxing != day_wuxing:
+        nayin_conflict = True
+    nayin_red = _fmt(_WUXING_MAP[nayin_wuxing]["red_balls"]) if nayin_wuxing else "无"
+    nayin_blue = _fmt(_WUXING_MAP[nayin_wuxing]["blue_balls"]) if nayin_wuxing else "无"
+    nayin_conflict_mark = " ⚠️与正五行冲突" if nayin_conflict else ""
+
+    # ===== v3.0 P2: 时辰号码分析（可选） =====
+    hour_parts = []
+    hour_red_all = []
+    hour_blue_all = []
+    if hour_zhi:
+        hour_wuxing = _DIZHI_RED_MAP[hour_zhi]["wuxing"]
+        hour_red = _fmt(_DIZHI_RED_MAP[hour_zhi]["red_balls"])
+        hour_blue = f"{_DIZHI_BLUE_MAP[hour_zhi]:02d}"
+        hour_wuxing_red = _fmt(_WUXING_MAP[hour_wuxing]["red_balls"])
+        hour_wuxing_blue = _fmt(_WUXING_MAP[hour_wuxing]["blue_balls"])
+        hour_luck = _HOUR_LUCK.get(hour_zhi, "")
+        hour_parts.append(
+            f"【时辰号码分析（娱乐）】\n"
+            f"- 时辰：{hour_zhi}时（{hour_wuxing}行）\n"
+            f"- 时支号码：红球 {hour_red} ｜蓝球 {hour_blue}\n"
+            f"- 时辰五行号码：红球 {hour_wuxing_red} ｜蓝球 {hour_wuxing_blue}\n"
+            f"- 时辰提示：{hour_luck}"
+        )
+        hour_red_all.extend(_DIZHI_RED_MAP[hour_zhi]["red_balls"])
+        hour_red_all.extend(_WUXING_MAP[hour_wuxing]["red_balls"])
+        hour_blue_all.append(_DIZHI_BLUE_MAP[hour_zhi])
+        hour_blue_all.extend(_WUXING_MAP[hour_wuxing]["blue_balls"])
+
+    # ===== v3.0 P3: 号码热度汇总（升级版） =====
+    red_heat = {}
     blue_heat = {}
+
+    # 维度1：旺行（权重×2）
+    for n in _WUXING_MAP[shengke["旺行"]]["red_balls"]:
+        red_heat[n] = red_heat.get(n, 0) + 2
     for n in _WUXING_MAP[shengke["旺行"]]["blue_balls"]:
         blue_heat[n] = blue_heat.get(n, 0) + 2
+
+    # 维度2：生我行（权重×1）
+    for n in _WUXING_MAP[shengke["生我行"]]["red_balls"]:
+        red_heat[n] = red_heat.get(n, 0) + 1
     for n in _WUXING_MAP[shengke["生我行"]]["blue_balls"]:
         blue_heat[n] = blue_heat.get(n, 0) + 1
+
+    # 维度3：日月
+    for n in _SUN_MOON_MAP["日"]["red_balls"]:
+        red_heat[n] = red_heat.get(n, 0) + 1
+    for n in _SUN_MOON_MAP["月"]["red_balls"]:
+        red_heat[n] = red_heat.get(n, 0) + 1
     for n in _SUN_MOON_MAP["日"]["blue_balls"]:
         blue_heat[n] = blue_heat.get(n, 0) + 1
     for n in _SUN_MOON_MAP["月"]["blue_balls"]:
         blue_heat[n] = blue_heat.get(n, 0) + 1
+
+    # 维度4：月相
+    for n in _MOON_PHASE_RED.get(moon_phase, []):
+        red_heat[n] = red_heat.get(n, 0) + 1
     for n in _MOON_PHASE_BLUE.get(moon_phase, []):
         blue_heat[n] = blue_heat.get(n, 0) + 1
+
+    # 维度5：六柱干支（权重×1）
+    for n in liuzhu_red_all:
+        red_heat[n] = red_heat.get(n, 0) + 1
+    for n in liuzhu_blue_all:
+        blue_heat[n] = blue_heat.get(n, 0) + 1
+
+    # 维度6：纳音五行（权重×1）
+    if nayin_wuxing:
+        for n in _WUXING_MAP[nayin_wuxing]["red_balls"]:
+            red_heat[n] = red_heat.get(n, 0) + 1
+        for n in _WUXING_MAP[nayin_wuxing]["blue_balls"]:
+            blue_heat[n] = blue_heat.get(n, 0) + 1
+
+    # 维度7：九宫飞星当日宫位号码（权重×1）
+    for n in day_zhi_bagua["red_balls"]:
+        red_heat[n] = red_heat.get(n, 0) + 1
+    for n in day_zhi_bagua["blue_balls"]:
+        blue_heat[n] = blue_heat.get(n, 0) + 1
+
+    # 维度8：时辰（可选，权重×1）
+    if hour_zhi:
+        for n in hour_red_all:
+            red_heat[n] = red_heat.get(n, 0) + 1
+        for n in hour_blue_all:
+            blue_heat[n] = blue_heat.get(n, 0) + 1
 
     # 按热度排序
     sorted_red = sorted(red_heat.items(), key=lambda x: (-x[1], x[0]))
     sorted_blue = sorted(blue_heat.items(), key=lambda x: (-x[1], x[0]))
 
-    # 热度标记：⭐⭐⭐=3+次, ⭐⭐=2次, ⭐=1次
     def _heat_label(count):
-        if count >= 3: return "⭐⭐⭐"
+        if count >= 5: return "⭐⭐⭐⭐"
+        elif count >= 3: return "⭐⭐⭐"
         elif count == 2: return "⭐⭐"
         else: return "⭐"
 
     red_summary_parts = []
-    for num, cnt in sorted_red[:12]:  # 取top12红球
+    for num, cnt in sorted_red[:15]:  # v3.0: 取top15红球
         red_summary_parts.append(f"{num:02d}{_heat_label(cnt)}")
 
     blue_summary_parts = []
-    for num, cnt in sorted_blue[:6]:  # 取top6蓝球
+    for num, cnt in sorted_blue[:8]:  # v3.0: 取top8蓝球
         blue_summary_parts.append(f"{num:02d}{_heat_label(cnt)}")
 
     # 三星号码（3+次重合）
     three_star_red = [f"{n:02d}" for n, c in sorted_red if c >= 3]
     three_star_blue = [f"{n:02d}" for n, c in sorted_blue if c >= 3]
 
-    # ===== 生成4个预格式化文本 =====
-    formatted_shengke = (
-        f"【五行生克分析（娱乐）】\n"
-        f"基于{mode_desc}的五行生克关系：\n"
-        f"- 旺行（{shengke['旺行']}）：红球 {wang_red} ｜蓝球 {wang_blue}\n"
-        f"- 生我行（{shengke['生我行']}→{shengke['旺行']}）：红球 {sheng_wo_red} ｜蓝球 {sheng_wo_blue}\n"
-        f"- 我生行·泄（{shengke['旺行']}→{shengke['我生行(泄)']}）：{wo_sheng_red}\n"
-        f"- 克我行（{shengke['克我行']}→{shengke['旺行']}）：红球 {ke_wo_red} ｜蓝球 {ke_wo_blue}\n"
-        f"- 我克行（{shengke['旺行']}→{shengke['我克行']}）：{wo_ke_red}"
-    )
+    # 冷门号码（热度为0）
+    all_red_nums = set(range(1, 34))
+    all_blue_nums = set(range(1, 17))
+    hot_red = set(red_heat.keys())
+    hot_blue = set(blue_heat.keys())
+    cold_red = sorted(all_red_nums - hot_red)
+    cold_blue = sorted(all_blue_nums - hot_blue)
+
+    # 冲突号码（纳音与正五行冲突时的号码）
+    conflict_red = []
+    conflict_blue = []
+    if nayin_conflict and nayin_wuxing:
+        nayin_red_set = set(_WUXING_MAP[nayin_wuxing]["red_balls"])
+        nayin_blue_set = set(_WUXING_MAP[nayin_wuxing]["blue_balls"])
+        zheng_red_set = set(_WUXING_MAP[day_wuxing]["red_balls"])
+        zheng_blue_set = set(_WUXING_MAP[day_wuxing]["blue_balls"])
+        conflict_red = sorted(nayin_red_set - zheng_red_set)  # 纳音有但正五行没有的红球
+        conflict_blue = sorted(nayin_blue_set - zheng_blue_set)
+
+    # ===== 生成6个预格式化文本 =====
+    # formatted_shengke（升级：+纳音行+冲突标记）
+    shengke_lines = [
+        f"【五行生克分析（娱乐）】",
+        f"基于{mode_desc}的五行生克关系：",
+        f"- 旺行（{shengke['旺行']}）：红球 {wang_red} ｜蓝球 {wang_blue}",
+        f"- 生我行（{shengke['生我行']}→{shengke['旺行']}）：红球 {sheng_wo_red} ｜蓝球 {sheng_wo_blue}",
+        f"- 我生行·泄（{shengke['旺行']}→{shengke['我生行(泄)']}）：{wo_sheng_red}",
+        f"- 克我行（{shengke['克我行']}→{shengke['旺行']}）：红球 {ke_wo_red} ｜蓝球 {ke_wo_blue}",
+        f"- 我克行（{shengke['旺行']}→{shengke['我克行']}）：{wo_ke_red}",
+        f"- 纳音五行（{day_ganzhi}→{nayin_wuxing_label}）：红球 {nayin_red} ｜蓝球 {nayin_blue}{nayin_conflict_mark}",
+    ]
+    formatted_shengke = "\n".join(shengke_lines)
 
     formatted_sun_moon = (
         f"【日月水火分析（娱乐）】\n"
@@ -1807,26 +2047,54 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan"):
         f"- 月相提示：{moon_luck}"
     )
 
-    # 三星号码汇总
+    # formatted_summary（升级版：+新维度+冲突/冷门号）
     three_star_red_str = "、".join(three_star_red) if three_star_red else "无"
     three_star_blue_str = "、".join(three_star_blue) if three_star_blue else "无"
+    cold_red_str = "、".join(f"{n:02d}" for n in cold_red) if cold_red else "无"
+    cold_blue_str = "、".join(f"{n:02d}" for n in cold_blue) if cold_blue else "无"
+    conflict_red_str = "、".join(f"{n:02d}" for n in conflict_red) if conflict_red else "无"
+    conflict_blue_str = "、".join(f"{n:02d}" for n in conflict_blue) if conflict_blue else "无"
 
-    formatted_summary = (
-        f"【综合号码热度汇总（娱乐）】\n"
-        f"以下号码在多个维度（旺行+生我行+日月+月相）重合出现，⭐越多重合度越高：\n\n"
-        f"🔥 红球热度TOP12：{'  '.join(red_summary_parts)}\n"
-        f"🔵 蓝球热度TOP6：{'  '.join(blue_summary_parts)}\n\n"
-        f"⭐⭐⭐ 三星红球（3+维度重合）：{three_star_red_str}\n"
-        f"⭐⭐⭐ 三星蓝球（3+维度重合）：{three_star_blue_str}\n\n"
-        f"💡 旺行判定模式：{mode_desc}"
-    )
+    dimension_count = 8 if hour_zhi else 7
+    summary_lines = [
+        f"【综合号码热度汇总（娱乐）】",
+        f"以下号码在{dimension_count}个维度（旺行+生我行+日月+月相+六柱干支+纳音五行+飞星方位{'+时辰' if hour_zhi else ''}）重合出现，⭐越多重合度越高：",
+        f"",
+        f"🔥 红球热度TOP15：{'  '.join(red_summary_parts)}",
+        f"🔵 蓝球热度TOP8：{'  '.join(blue_summary_parts)}",
+        f"",
+        f"⭐⭐⭐ 三星红球（3+维度重合）：{three_star_red_str}",
+        f"⭐⭐⭐ 三星蓝球（3+维度重合）：{three_star_blue_str}",
+    ]
+    if nayin_conflict:
+        summary_lines.extend([
+            f"",
+            f"⚠️ 纳音冲突红球（纳音有·正五行无）：{conflict_red_str}",
+            f"⚠️ 纳音冲突蓝球（纳音有·正五行无）：{conflict_blue_str}",
+        ])
+    summary_lines.extend([
+        f"",
+        f"❄️ 冷门红球（无维度覆盖）：{cold_red_str}",
+        f"❄️ 冷门蓝球（无维度覆盖）：{cold_blue_str}",
+        f"",
+        f"💡 旺行判定模式：{mode_desc}",
+    ])
+    formatted_summary = "\n".join(summary_lines)
 
-    return {
+    result = {
         "formatted_shengke": formatted_shengke,
         "formatted_sun_moon": formatted_sun_moon,
         "formatted_moon_phase": formatted_moon_phase,
         "formatted_summary": formatted_summary,
+        "formatted_liuzhu": formatted_liuzhu,
+        "formatted_feixing": formatted_feixing,
     }
+
+    # 时辰号码（可选，拼入summary末尾）
+    if hour_parts:
+        result["formatted_hour"] = "\n".join(hour_parts)
+
+    return result
 
 
 @app.get("/ganzhi/map", tags=["双色球玄学映射"])
