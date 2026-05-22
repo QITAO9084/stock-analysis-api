@@ -3,3 +3,4 @@ uvicorn[standard]
 yfinance>=0.2.0
 pandas>=2.0.0
 numpy>=1.24.0
+lunarcalendar>=0.0.9
