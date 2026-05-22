@@ -1553,6 +1553,57 @@ _MOON_PHASE = {
     26: "下弦后", 27: "下弦后", 28: "晦前", 29: "晦", 30: "晦",
 }
 
+# 月相红球号码映射（按月相阶段取象）
+_MOON_PHASE_RED = {
+    "朔（新月）": [1, 11, 21],
+    "朔后": [2, 12, 22],
+    "上弦前": [3, 13, 23],
+    "上弦": [4, 14, 24],
+    "上弦后": [5, 15, 25],
+    "望前": [6, 16, 26],
+    "望（满月）": [7, 17, 27],
+    "望后": [8, 18, 28],
+    "下弦前": [9, 19, 29],
+    "下弦": [10, 20, 30],
+    "下弦后": [11, 21, 31],
+    "晦前": [12, 22, 32],
+    "晦": [13, 23, 33],
+}
+
+# 月相蓝球号码映射（按月相阴阳消长）
+_MOON_PHASE_BLUE = {
+    "朔（新月）": [1],       # 极阴，坎水
+    "朔后": [1, 2],          # 阴始消
+    "上弦前": [2, 3],        # 阳渐长
+    "上弦": [3, 4],          # 阴阳半
+    "上弦后": [4, 5],        # 阳胜阴
+    "望前": [5, 6],          # 阳将极
+    "望（满月）": [6, 7],    # 极阳，离火
+    "望后": [7, 8],          # 阳始消
+    "下弦前": [8, 9],        # 阴渐长
+    "下弦": [9, 10],         # 阴阳半
+    "下弦后": [10, 11],      # 阴胜阳
+    "晦前": [11, 12],        # 阴将极
+    "晦": [12, 13],          # 极阴
+}
+
+# 月相吉凶倾向（纯娱乐）
+_MOON_PHASE_LUCK = {
+    "朔（新月）": "🌑 蛰伏期·宜守不宜攻·蓝球偏小号",
+    "朔后": "🌱 萌动期·渐有转机·可小试",
+    "上弦前": "🌿 生长中·阳气渐旺·偏红球中段",
+    "上弦": "🌓 平衡期·阴阳各半·号码分散",
+    "上弦后": "🌳 旺盛期·阳气充盈·红球偏大号",
+    "望前": "🔥 将满期·能量蓄积·偏旺行号码",
+    "望（满月）": "🌕 极盛期·阳气最旺·旺行+火行优先",
+    "望后": "🌗 转衰期·盛极而衰·注意克我行号码",
+    "下弦前": "🍂 收敛期·阳气渐退·偏生我行号码",
+    "下弦": "🌓 平衡期·阴渐胜阳·注意泄行号码",
+    "下弦后": "🌑 蛰伏前·阴气加重·蓝球偏小号",
+    "晦前": "🕳️ 将晦期·能量最低·宜保守",
+    "晦": "🌑 极暗期·最弱之时·蓝球取极小号",
+}
+
 
 def _fmt(nums: list) -> str:
     """格式化号码列表为逗号分隔字符串，两位补零"""
@@ -1578,14 +1629,18 @@ def _get_shengke_info(day_wuxing: str) -> dict:
 
 
 @app.get("/ganzhi", tags=["双色球玄学映射"])
-async def ganzhi_by_date(date: str = "2026-05-22"):
+async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan"):
     """
     干支五行号码映射接口（按日期查询，专为Coze插件优化）
 
     输入公历日期，API自动计算阴历和干支，返回预格式化文本。
-    v2.1断源策略：只返回3个formatted_xxx字段，Agent直接复制粘贴。
+    v2.3：新增月相号码映射、旺行可选逻辑、号码热度汇总。
 
     - **date**: 公历日期（格式：YYYY-MM-DD）
+    - **mode**: 旺行判定逻辑，可选：
+      - day_gan（默认）：日柱天干五行
+      - day_zhi：日柱地支五行
+      - majority：六柱综合众数
     """
     try:
         parts = date.split('-')
@@ -1594,6 +1649,9 @@ async def ganzhi_by_date(date: str = "2026-05-22"):
     except Exception:
         raise HTTPException(status_code=400, detail=f"日期格式错误，请使用YYYY-MM-DD格式，如2026-05-22")
 
+    if mode not in ("day_gan", "day_zhi", "majority"):
+        raise HTTPException(status_code=400, detail=f"mode参数错误，可选：day_gan / day_zhi / majority")
+
     try:
         from lunarcalendar import Converter, Solar
         solar = Solar(solar_date.year, solar_date.month, solar_date.day)
@@ -1601,7 +1659,7 @@ async def ganzhi_by_date(date: str = "2026-05-22"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"阴历转换失败: {str(e)}")
 
-    # 计算干支（使用已有的计算逻辑）
+    # 计算干支
     _TIANGAN_LIST = ['甲','乙','丙','丁','戊','己','庚','辛','壬','癸']
     _DIZHI_LIST = ['子','丑','寅','卯','辰','巳','午','未','申','酉','戌','亥']
 
@@ -1630,32 +1688,26 @@ async def ganzhi_by_date(date: str = "2026-05-22"):
 
     lunar_day = lunar.day
 
-    # 天干映射
-    yg = _TIANGAN_MAP.get(year_gan)
-    mg = _TIANGAN_MAP.get(month_gan)
-    dg = _TIANGAN_MAP.get(day_gan)
-    yz = _DIZHI_RED_MAP.get(year_zhi)
-    mz = _DIZHI_RED_MAP.get(month_zhi)
-    dz = _DIZHI_RED_MAP.get(day_zhi)
+    # 六柱五行统计
+    from collections import Counter
+    six_pillars_wx = [
+        _TIANGAN_MAP[year_gan]["wuxing"], _DIZHI_RED_MAP[year_zhi]["wuxing"],
+        _TIANGAN_MAP[month_gan]["wuxing"], _DIZHI_RED_MAP[month_zhi]["wuxing"],
+        _TIANGAN_MAP[day_gan]["wuxing"], _DIZHI_RED_MAP[day_zhi]["wuxing"],
+    ]
+    wx_counter = Counter(six_pillars_wx)
 
-    if not all([yg, mg, dg, yz, mz, dz]):
-        raise HTTPException(status_code=500, detail="干支计算异常")
+    # P1: 旺行判定逻辑
+    if mode == "day_zhi":
+        day_wuxing = _DIZHI_RED_MAP[day_zhi]["wuxing"]
+        mode_desc = f"日柱地支{day_zhi}（{day_wuxing}行）"
+    elif mode == "majority":
+        day_wuxing = wx_counter.most_common(1)[0][0]
+        mode_desc = f"六柱综合众数（{day_wuxing}行出现{wx_counter[day_wuxing]}次）"
+    else:  # day_gan
+        day_wuxing = _TIANGAN_MAP[day_gan]["wuxing"]
+        mode_desc = f"日柱天干{day_gan}（{day_wuxing}行）"
 
-    # 地支蓝球
-    yz_blue = _DIZHI_BLUE_MAP.get(year_zhi, 0)
-    mz_blue = _DIZHI_BLUE_MAP.get(month_zhi, 0)
-    dz_blue = _DIZHI_BLUE_MAP.get(day_zhi, 0)
-
-    # 天干蓝球（按五行取蓝球）
-    _wuxing_blue_map = {"金": _WUXING_MAP["金"]["blue_balls"], "木": _WUXING_MAP["木"]["blue_balls"],
-                        "水": _WUXING_MAP["水"]["blue_balls"], "火": _WUXING_MAP["火"]["blue_balls"],
-                        "土": _WUXING_MAP["土"]["blue_balls"]}
-    yg_blue = _fmt(_wuxing_blue_map[yg["wuxing"]])
-    mg_blue = _fmt(_wuxing_blue_map[mg["wuxing"]])
-    dg_blue = _fmt(_wuxing_blue_map[dg["wuxing"]])
-
-    # 五行生克分析（基于日柱天干五行）
-    day_wuxing = dg["wuxing"]
     shengke = _get_shengke_info(day_wuxing)
 
     # 月相
@@ -1668,14 +1720,73 @@ async def ganzhi_by_date(date: str = "2026-05-22"):
     ke_wo_red = _fmt(_WUXING_MAP[shengke["克我行"]]["red_balls"])
     wo_ke_red = _fmt(_WUXING_MAP[shengke["我克行"]]["red_balls"])
 
-    # ===== 生成3个预格式化文本 =====
+    # 旺行蓝球
+    wang_blue = _fmt(_WUXING_MAP[shengke["旺行"]]["blue_balls"])
+    sheng_wo_blue = _fmt(_WUXING_MAP[shengke["生我行"]]["blue_balls"])
+    ke_wo_blue = _fmt(_WUXING_MAP[shengke["克我行"]]["blue_balls"])
+
+    # ===== P0: 月相号码 =====
+    moon_red = _fmt(_MOON_PHASE_RED.get(moon_phase, [6, 16, 26]))
+    moon_blue = _fmt(_MOON_PHASE_BLUE.get(moon_phase, [1]))
+    moon_luck = _MOON_PHASE_LUCK.get(moon_phase, "")
+
+    # ===== P2: 号码热度汇总 =====
+    # 统计每个红球在旺行/生我/克我/日月/月相中出现的次数
+    red_heat = {}
+    for n in _WUXING_MAP[shengke["旺行"]]["red_balls"]:
+        red_heat[n] = red_heat.get(n, 0) + 2  # 旺行权重×2
+    for n in _WUXING_MAP[shengke["生我行"]]["red_balls"]:
+        red_heat[n] = red_heat.get(n, 0) + 1  # 生我行权重×1
+    for n in _SUN_MOON_MAP["日"]["red_balls"]:
+        red_heat[n] = red_heat.get(n, 0) + 1  # 日权重×1
+    for n in _SUN_MOON_MAP["月"]["red_balls"]:
+        red_heat[n] = red_heat.get(n, 0) + 1  # 月权重×1
+    for n in _MOON_PHASE_RED.get(moon_phase, []):
+        red_heat[n] = red_heat.get(n, 0) + 1  # 月相权重×1
+
+    # 蓝球热度
+    blue_heat = {}
+    for n in _WUXING_MAP[shengke["旺行"]]["blue_balls"]:
+        blue_heat[n] = blue_heat.get(n, 0) + 2
+    for n in _WUXING_MAP[shengke["生我行"]]["blue_balls"]:
+        blue_heat[n] = blue_heat.get(n, 0) + 1
+    for n in _SUN_MOON_MAP["日"]["blue_balls"]:
+        blue_heat[n] = blue_heat.get(n, 0) + 1
+    for n in _SUN_MOON_MAP["月"]["blue_balls"]:
+        blue_heat[n] = blue_heat.get(n, 0) + 1
+    for n in _MOON_PHASE_BLUE.get(moon_phase, []):
+        blue_heat[n] = blue_heat.get(n, 0) + 1
+
+    # 按热度排序
+    sorted_red = sorted(red_heat.items(), key=lambda x: (-x[1], x[0]))
+    sorted_blue = sorted(blue_heat.items(), key=lambda x: (-x[1], x[0]))
+
+    # 热度标记：⭐⭐⭐=3+次, ⭐⭐=2次, ⭐=1次
+    def _heat_label(count):
+        if count >= 3: return "⭐⭐⭐"
+        elif count == 2: return "⭐⭐"
+        else: return "⭐"
+
+    red_summary_parts = []
+    for num, cnt in sorted_red[:12]:  # 取top12红球
+        red_summary_parts.append(f"{num:02d}{_heat_label(cnt)}")
+
+    blue_summary_parts = []
+    for num, cnt in sorted_blue[:6]:  # 取top6蓝球
+        blue_summary_parts.append(f"{num:02d}{_heat_label(cnt)}")
+
+    # 三星号码（3+次重合）
+    three_star_red = [f"{n:02d}" for n, c in sorted_red if c >= 3]
+    three_star_blue = [f"{n:02d}" for n, c in sorted_blue if c >= 3]
+
+    # ===== 生成4个预格式化文本 =====
     formatted_shengke = (
         f"【五行生克分析（娱乐）】\n"
-        f"基于日柱天干{day_gan}（{day_wuxing}行）的五行生克关系：\n"
-        f"- 旺行（{shengke['旺行']}）：{wang_red}\n"
-        f"- 生我行（{shengke['生我行']}→{shengke['旺行']}）：{sheng_wo_red}\n"
+        f"基于{mode_desc}的五行生克关系：\n"
+        f"- 旺行（{shengke['旺行']}）：红球 {wang_red} ｜蓝球 {wang_blue}\n"
+        f"- 生我行（{shengke['生我行']}→{shengke['旺行']}）：红球 {sheng_wo_red} ｜蓝球 {sheng_wo_blue}\n"
         f"- 我生行·泄（{shengke['旺行']}→{shengke['我生行(泄)']}）：{wo_sheng_red}\n"
-        f"- 克我行（{shengke['克我行']}→{shengke['旺行']}）：{ke_wo_red}\n"
+        f"- 克我行（{shengke['克我行']}→{shengke['旺行']}）：红球 {ke_wo_red} ｜蓝球 {ke_wo_blue}\n"
         f"- 我克行（{shengke['旺行']}→{shengke['我克行']}）：{wo_ke_red}"
     )
 
@@ -1690,13 +1801,31 @@ async def ganzhi_by_date(date: str = "2026-05-22"):
     formatted_moon_phase = (
         f"【月相分析（娱乐）】\n"
         f"- 今日阴历日数：{lunar_day}\n"
-        f"- 今日月相：{moon_phase}"
+        f"- 今日月相：{moon_phase}\n"
+        f"- 月相红球：{moon_red}\n"
+        f"- 月相蓝球：{moon_blue}\n"
+        f"- 月相提示：{moon_luck}"
+    )
+
+    # 三星号码汇总
+    three_star_red_str = "、".join(three_star_red) if three_star_red else "无"
+    three_star_blue_str = "、".join(three_star_blue) if three_star_blue else "无"
+
+    formatted_summary = (
+        f"【综合号码热度汇总（娱乐）】\n"
+        f"以下号码在多个维度（旺行+生我行+日月+月相）重合出现，⭐越多重合度越高：\n\n"
+        f"🔥 红球热度TOP12：{'  '.join(red_summary_parts)}\n"
+        f"🔵 蓝球热度TOP6：{'  '.join(blue_summary_parts)}\n\n"
+        f"⭐⭐⭐ 三星红球（3+维度重合）：{three_star_red_str}\n"
+        f"⭐⭐⭐ 三星蓝球（3+维度重合）：{three_star_blue_str}\n\n"
+        f"💡 旺行判定模式：{mode_desc}"
     )
 
     return {
         "formatted_shengke": formatted_shengke,
         "formatted_sun_moon": formatted_sun_moon,
         "formatted_moon_phase": formatted_moon_phase,
+        "formatted_summary": formatted_summary,
     }
 
 
