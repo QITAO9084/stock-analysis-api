@@ -1577,6 +1577,129 @@ def _get_shengke_info(day_wuxing: str) -> dict:
     }
 
 
+@app.get("/ganzhi", tags=["双色球玄学映射"])
+async def ganzhi_by_date(date: str = "2026-05-22"):
+    """
+    干支五行号码映射接口（按日期查询，专为Coze插件优化）
+
+    输入公历日期，API自动计算阴历和干支，返回预格式化文本。
+    v2.1断源策略：只返回3个formatted_xxx字段，Agent直接复制粘贴。
+
+    - **date**: 公历日期（格式：YYYY-MM-DD）
+    """
+    try:
+        parts = date.split('-')
+        from datetime import date as date_cls
+        solar_date = date_cls(int(parts[0]), int(parts[1]), int(parts[2]))
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"日期格式错误，请使用YYYY-MM-DD格式，如2026-05-22")
+
+    try:
+        from lunarcalendar import Converter, Solar
+        solar = Solar(solar_date.year, solar_date.month, solar_date.day)
+        lunar = Converter.Solar2Lunar(solar)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"阴历转换失败: {str(e)}")
+
+    # 计算干支（使用已有的计算逻辑）
+    _TIANGAN_LIST = ['甲','乙','丙','丁','戊','己','庚','辛','壬','癸']
+    _DIZHI_LIST = ['子','丑','寅','卯','辰','巳','午','未','申','酉','戌','亥']
+
+    # 年柱
+    y_offset = solar_date.year - 1984
+    year_gan = _TIANGAN_LIST[y_offset % 10]
+    year_zhi = _DIZHI_LIST[y_offset % 12]
+
+    # 日柱
+    base_date = datetime(2000, 1, 7).date() if hasattr(datetime(2000, 1, 7), 'date') else __import__('datetime').date(2000, 1, 7)
+    diff = (solar_date - base_date).days
+    day_gan = _TIANGAN_LIST[diff % 10]
+    day_zhi = _DIZHI_LIST[diff % 12]
+
+    # 月柱
+    month_dz_map = {1:'丑', 2:'寅', 3:'卯', 4:'辰', 5:'巳', 6:'午',
+                    7:'未', 8:'申', 9:'酉', 10:'戌', 11:'亥', 12:'子'}
+    month_zhi = month_dz_map[solar_date.month]
+    tg_start_map = {'甲':'丙','己':'丙','乙':'戊','庚':'戊','丙':'庚','辛':'庚',
+                     '丁':'壬','壬':'壬','戊':'甲','癸':'甲'}
+    start_tg = tg_start_map[year_gan]
+    start_idx = _TIANGAN_LIST.index(start_tg)
+    month_dz_order = ['寅','卯','辰','巳','午','未','申','酉','戌','亥','子','丑']
+    month_dz_idx = month_dz_order.index(month_zhi)
+    month_gan = _TIANGAN_LIST[(start_idx + month_dz_idx) % 10]
+
+    lunar_day = lunar.day
+
+    # 天干映射
+    yg = _TIANGAN_MAP.get(year_gan)
+    mg = _TIANGAN_MAP.get(month_gan)
+    dg = _TIANGAN_MAP.get(day_gan)
+    yz = _DIZHI_RED_MAP.get(year_zhi)
+    mz = _DIZHI_RED_MAP.get(month_zhi)
+    dz = _DIZHI_RED_MAP.get(day_zhi)
+
+    if not all([yg, mg, dg, yz, mz, dz]):
+        raise HTTPException(status_code=500, detail="干支计算异常")
+
+    # 地支蓝球
+    yz_blue = _DIZHI_BLUE_MAP.get(year_zhi, 0)
+    mz_blue = _DIZHI_BLUE_MAP.get(month_zhi, 0)
+    dz_blue = _DIZHI_BLUE_MAP.get(day_zhi, 0)
+
+    # 天干蓝球（按五行取蓝球）
+    _wuxing_blue_map = {"金": _WUXING_MAP["金"]["blue_balls"], "木": _WUXING_MAP["木"]["blue_balls"],
+                        "水": _WUXING_MAP["水"]["blue_balls"], "火": _WUXING_MAP["火"]["blue_balls"],
+                        "土": _WUXING_MAP["土"]["blue_balls"]}
+    yg_blue = _fmt(_wuxing_blue_map[yg["wuxing"]])
+    mg_blue = _fmt(_wuxing_blue_map[mg["wuxing"]])
+    dg_blue = _fmt(_wuxing_blue_map[dg["wuxing"]])
+
+    # 五行生克分析（基于日柱天干五行）
+    day_wuxing = dg["wuxing"]
+    shengke = _get_shengke_info(day_wuxing)
+
+    # 月相
+    moon_phase = _MOON_PHASE.get(lunar_day, "未知")
+
+    # 旺行号码
+    wang_red = _fmt(_WUXING_MAP[shengke["旺行"]]["red_balls"])
+    sheng_wo_red = _fmt(_WUXING_MAP[shengke["生我行"]]["red_balls"])
+    wo_sheng_red = _fmt(_WUXING_MAP[shengke["我生行(泄)"]]["red_balls"])
+    ke_wo_red = _fmt(_WUXING_MAP[shengke["克我行"]]["red_balls"])
+    wo_ke_red = _fmt(_WUXING_MAP[shengke["我克行"]]["red_balls"])
+
+    # ===== 生成3个预格式化文本 =====
+    formatted_shengke = (
+        f"【五行生克分析（娱乐）】\n"
+        f"基于日柱天干{day_gan}（{day_wuxing}行）的五行生克关系：\n"
+        f"- 旺行（{shengke['旺行']}）：{wang_red}\n"
+        f"- 生我行（{shengke['生我行']}→{shengke['旺行']}）：{sheng_wo_red}\n"
+        f"- 我生行·泄（{shengke['旺行']}→{shengke['我生行(泄)']}）：{wo_sheng_red}\n"
+        f"- 克我行（{shengke['克我行']}→{shengke['旺行']}）：{ke_wo_red}\n"
+        f"- 我克行（{shengke['旺行']}→{shengke['我克行']}）：{wo_ke_red}"
+    )
+
+    formatted_sun_moon = (
+        f"【日月水火分析（娱乐）】\n"
+        f"- 日·太阳（{_SUN_MOON_MAP['日']['desc']}）：红球 {_fmt(_SUN_MOON_MAP['日']['red_balls'])} ｜蓝球 {_fmt(_SUN_MOON_MAP['日']['blue_balls'])}\n"
+        f"- 月·太阴（{_SUN_MOON_MAP['月']['desc']}）：红球 {_fmt(_SUN_MOON_MAP['月']['red_balls'])} ｜蓝球 {_fmt(_SUN_MOON_MAP['月']['blue_balls'])}\n"
+        f"- 水·坎卦（{_SUN_MOON_MAP['水']['desc']}）：红球 {_fmt(_SUN_MOON_MAP['水']['red_balls'])} ｜蓝球 {_fmt(_SUN_MOON_MAP['水']['blue_balls'])}\n"
+        f"- 火·离卦（{_SUN_MOON_MAP['火']['desc']}）：红球 {_fmt(_SUN_MOON_MAP['火']['red_balls'])} ｜蓝球 {_fmt(_SUN_MOON_MAP['火']['blue_balls'])}"
+    )
+
+    formatted_moon_phase = (
+        f"【月相分析（娱乐）】\n"
+        f"- 今日阴历日数：{lunar_day}\n"
+        f"- 今日月相：{moon_phase}"
+    )
+
+    return {
+        "formatted_shengke": formatted_shengke,
+        "formatted_sun_moon": formatted_sun_moon,
+        "formatted_moon_phase": formatted_moon_phase,
+    }
+
+
 @app.get("/ganzhi/map", tags=["双色球玄学映射"])
 async def ganzhi_map(
     year_gan: str = "甲", year_zhi: str = "子",
