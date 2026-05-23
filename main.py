@@ -2233,6 +2233,23 @@ async def ssq_history(limit: int = 30):
 
     - **limit**: 返回最近N期数据，默认30，最大200
     """
+    # 如果mode="all"，并行跑三种模式
+    if mode == "all":
+        results_all = {}
+        for m in ["day_gan", "day_zhi", "majority"]:
+            result = await _run_backtest(data, periods, m)
+            results_all[m] = result
+        # 对比三种模式，生成推荐
+        recommend = _compare_backtest_modes(results_all, periods)
+        return {
+            "periods_tested": periods,
+            "mode": "all",
+            "results_all": results_all,
+            "formatted_backtest_all": recommend["formatted"],
+            "recommend_mode": recommend["recommend_mode"],
+            "recommend_reason": recommend["reason"],
+        }
+
     if not _SSQ_HISTORY:
         raise HTTPException(status_code=503, detail="历史数据未加载")
     limit = min(limit, 200)
@@ -2445,10 +2462,15 @@ async def ssq_backtest(periods: int = 200, mode: str = "day_gan"):
     双色球玄学维度回测验证
 
     对历史每期数据，用/ganzhi相同逻辑计算各维度号码，与实际开奖号码对比。
-    - **periods**: 回测最近N期，默认50，最大129
-    - **mode**: 旺行判定逻辑，同/ganzhi
+    - **periods**: 回测最近N期，默认200，最大2144
+    - **mode**: 旺行判定逻辑，可选：
+      - day_gan（默认）：日柱天干五行
+      - day_zhi：日柱地支五行
+      - majority：六柱综合众数
+      - all：三种模式并行回测，对比结果并推荐最优
 
     返回每个维度在红球/蓝球中的命中率，与随机概率对比。
+    当mode="all"时，额外返回三种模式的对比结果和推荐。
     """
     if not _SSQ_HISTORY:
         raise HTTPException(status_code=503, detail="历史数据未加载")
