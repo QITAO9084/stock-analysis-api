@@ -1742,8 +1742,8 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
     except Exception:
         raise HTTPException(status_code=400, detail=f"日期格式错误，请使用YYYY-MM-DD格式，如2026-05-22")
 
-    if mode not in ("day_gan", "day_zhi", "majority"):
-        raise HTTPException(status_code=400, detail=f"mode参数错误，可选：day_gan / day_zhi / majority")
+    if mode not in ("day_gan", "day_zhi", "majority", "auto"):
+        raise HTTPException(status_code=400, detail=f"mode参数错误，可选：day_gan / day_zhi / majority / auto")
 
     valid_zhi = ['子','丑','寅','卯','辰','巳','午','未','申','酉','戌','亥']
     if hour_zhi and hour_zhi not in valid_zhi:
@@ -1810,6 +1810,22 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
     wx_counter = Counter(six_pillars_wx)
 
     # P1: 旺行判定逻辑
+    auto_reason = ""
+    if mode == "auto":
+        # v3.5: auto模式自动推荐
+        top_wx, top_count = wx_counter.most_common(1)[0]
+        day_gan_wx = _TIANGAN_MAP[day_gan]["wuxing"]
+        day_zhi_wx = _DIZHI_RED_MAP[day_zhi]["wuxing"]
+        if top_count >= 4:
+            mode = "majority"
+            auto_reason = f"auto→majority：众数{top_wx}出现{top_count}次"
+        elif day_zhi_wx != day_gan_wx and top_count >= 3:
+            mode = "day_zhi"
+            auto_reason = f"auto→day_zhi：众数{top_wx}出现{top_count}次，日干≠日支"
+        else:
+            mode = "day_gan"
+            auto_reason = f"auto→day_gan：六柱分散，默认日干"
+
     if mode == "day_zhi":
         day_wuxing = _DIZHI_RED_MAP[day_zhi]["wuxing"]
         mode_desc = f"日柱地支{day_zhi}（{day_wuxing}行）"
@@ -2121,10 +2137,15 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
     conflict_red_str = "、".join(f"{n:02d}" for n in conflict_red) if conflict_red else "无"
     conflict_blue_str = "、".join(f"{n:02d}" for n in conflict_blue) if conflict_blue else "无"
 
-    dimension_count = 8 if hour_zhi else 7
+    dimension_count = (9 if hour_zhi else 8) if (birthday and b_shengke) else (8 if hour_zhi else 7)
+    _dim_names = "旺行+生我行+日月+月相+六柱干支+纳音五行+飞星方位"
+    if hour_zhi:
+        _dim_names += "+时辰"
+    if birthday and b_shengke:
+        _dim_names += "+🎂出生"
     summary_lines = [
         f"【综合号码热度汇总（娱乐）】",
-        f"以下号码在{dimension_count}个维度（旺行+生我行+日月+月相+六柱干支+纳音五行+飞星方位{'+时辰' if hour_zhi else ''}）重合出现，⭐越多重合度越高：",
+        f"以下号码在{dimension_count}个维度（{_dim_names}）重合出现，⭐越多重合度越高：",
         f"",
         f"🔥 红球热度TOP15：{'  '.join(red_summary_parts)}",
         f"🔵 蓝球热度TOP8：{'  '.join(blue_summary_parts)}",
@@ -2143,7 +2164,7 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
         f"❄️ 冷门红球（无维度覆盖）：{cold_red_str}",
         f"❄️ 冷门蓝球（无维度覆盖）：{cold_blue_str}",
         f"",
-        f"💡 旺行判定模式：{mode_desc}",
+        f"💡 旺行判定模式：{mode_desc}" + (f"（{auto_reason}）" if auto_reason else ""),
     ])
     if birthday and b_day_gan:
         summary_lines.extend([
@@ -2877,13 +2898,17 @@ def _compare_backtest_modes(results_all, periods):
     }
 
 @app.get("/ssq/pick", tags=["双色球历史数据"])
-async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5, birthday: str = ""):
+async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday: str = ""):
     """
     双色球融合选号接口（玄学+统计）
 
     基于回测验证的有效维度+历史统计，融合生成推荐号码组合。
     - **date**: 公历日期（YYYY-MM-DD），默认今天
-    - **mode**: 旺行判定逻辑，同/ganzhi
+    - **mode**: 旺行判定逻辑，可选：
+      - auto（默认）：自动推荐最优模式
+      - day_gan：日柱天干五行
+      - day_zhi：日柱地支五行
+      - majority：六柱综合众数
     - **count**: 生成几注，默认5，最大10
 
     选号逻辑：
@@ -2899,8 +2924,8 @@ async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5, birthd
 
     if not _SSQ_HISTORY:
         raise HTTPException(status_code=503, detail="历史数据未加载")
-    if mode not in ("day_gan", "day_zhi", "majority"):
-        raise HTTPException(status_code=400, detail="mode参数错误")
+    if mode not in ("day_gan", "day_zhi", "majority", "auto"):
+        raise HTTPException(status_code=400, detail="mode参数错误，可选：day_gan / day_zhi / majority / auto")
     count = min(max(count, 1), 10)
 
     # 日期处理
@@ -2943,6 +2968,26 @@ async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5, birthd
         _TIANGAN_MAP[day_gan]["wuxing"], _DIZHI_RED_MAP[day_zhi]["wuxing"],
     ]
     wx_counter = Counter(six_wx)
+
+    # v3.5: auto模式自动推荐（基于六柱五行分布+回测结论）
+    auto_reason = ""
+    if mode == "auto":
+        top_wx, top_count = wx_counter.most_common(1)[0]
+        day_gan_wx = _TIANGAN_MAP[day_gan]["wuxing"]
+        day_zhi_wx = _DIZHI_RED_MAP[day_zhi]["wuxing"]
+        if top_count >= 4:
+            # 众数五行出现4+次，majority更有效（生我行+7.86%）
+            mode = "majority"
+            auto_reason = f"auto→majority：六柱众数{top_wx}出现{top_count}次(≥4)，majority生我行+7.86%"
+        elif day_zhi_wx != day_gan_wx and top_count >= 3:
+            # 众数3次且日干支五行不同，day_zhi蓝球克我行+13.08%最有效
+            mode = "day_zhi"
+            auto_reason = f"auto→day_zhi：众数{top_wx}出现{top_count}次，日干({day_gan_wx})≠日支({day_zhi_wx})，day_zhi蓝球克我行+13.08%"
+        else:
+            # 默认day_gan，红球生我行+6.57%稳定有效
+            mode = "day_gan"
+            auto_reason = f"auto→day_gan：六柱分散(众数{top_wx}仅{top_count}次)，day_gan生我行+6.57%稳定"
+
     if mode == "day_zhi":
         day_wuxing = _DIZHI_RED_MAP[day_zhi]["wuxing"]
     elif mode == "majority":
@@ -2953,22 +2998,23 @@ async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5, birthd
     shengke = _get_shengke_info(day_wuxing)
 
     # 玄学红球候选池（基于回测有效维度，日月已移除-负面）
-    # 自适应权重配置（基于2144期回测提升值，改此处即全局生效）
+    # 自适应权重配置v3.5（基于2144期全量回测，改此处即全局生效）
     # 按模式分组：day_gan用生我行，day_zhi用克我行+我生行·泄
     BACKTEST_WEIGHTS = {
         "day_gan": {
             "六柱干支": 3,    # 提升+15.05%，最有效维度
             "生我行":   2,    # 提升+6.57%
             "纳音五行": 2,    # 提升+5.53%
-            "飞星":     1,    # 飞星方位，暂保留
+            "飞星":     2,    # 红球+0.73%中性偏正，提升覆盖
             "旺行":     0,    # 红球-5.24%负面，降权至0
+            "克我行":   0,    # 红球-0.73%中性偏负
         },
         "day_zhi": {
             "六柱干支": 3,    # 提升+15.05%，最有效维度
             "我生行·泄": 2,   # 提升+5.28%
             "纳音五行": 2,    # 提升+5.53%
-            "克我行":   1,    # 红球+3.54%，蓝球+13.08%
-            "飞星":     1,    # 飞星方位，暂保留
+            "克我行":   2,    # 红球+3.54%✅，蓝球+13.08%✅ 提升×1→×2
+            "飞星":     2,    # 红球+0.73%中性偏正，提升覆盖
             "旺行":     0,    # 红球+0.44%中性，蓝球+11.53%有效但红球弱
             "生我行":   0,    # 红球-2.21%负面，蓝球-23.55%大幅负面
         },
@@ -2976,7 +3022,7 @@ async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5, birthd
             "六柱干支": 3,    # 提升+15.05%，最有效维度
             "生我行":   2,    # 提升+7.86%
             "纳音五行": 2,    # 提升+5.53%
-            "飞星":     1,    # 飞星方位，暂保留
+            "飞星":     2,    # 红球+0.73%中性偏正，提升覆盖
             "旺行":     0,    # 红球-3.43%负面
             "我克行":   0,    # 红球-3.76%负面
         },
@@ -2984,7 +3030,7 @@ async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5, birthd
     _weights = BACKTEST_WEIGHTS.get(mode, BACKTEST_WEIGHTS["day_gan"])
     _weight_str = " / ".join(f"{k}×{v}" for k,v in _weights.items() if v > 0)
 
-    # 蓝球独立权重（回测显示蓝球维度效果与红球差异大）
+    # 蓝球独立权重v3.5（基于2144期全量回测）
     # 红球用_weights，蓝球用_weights_blue
     BACKTEST_WEIGHTS_BLUE = {
         "day_gan": {
@@ -2992,9 +3038,9 @@ async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5, birthd
             "生我行":   0,    # 蓝球-5.62%负面！降权至0
             "纳音五行": 0,    # 蓝球-0.97%中性偏负
             "飞星":     1,    # 蓝球+0.73%中性
-            "旺行":     1,    # 蓝球+8.43%有效！恢复权重
-            "克我行":   0,    # day_gan无此维度
-            "我生行·泄": 0,   # day_gan无此维度
+            "旺行":     1,    # 蓝球+8.43%有效！
+            "克我行":   1,    # 蓝球+6.88%有效！v3.5新增（红球-0.73%但蓝球有效）
+            "我生行·泄": 0,   # 蓝球无数据
         },
         "day_zhi": {
             "六柱干支": 1,    # 蓝球+1.41%弱有效
@@ -3154,17 +3200,22 @@ async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5, birthd
         stat_blue_score[n] = freq_score * 0.6 + miss_score * 0.4
 
     # ===== 第三步：融合评分 =====
+    # v3.5: 冷门号保底分（玄学0分的号码给0.5基础分，避免完全排除）
+    _COLD_FLOOR = 0.5
     final_red_score = {}
     for n in range(1, 34):
         x_score = xuanxue_red_score.get(n, 0)
         s_score = stat_red_score.get(n, 0) * 5  # 统计分归一化到0-5
-        final_red_score[n] = x_score + s_score  # 玄学权重+统计权重
+        # 冷门号保底：玄学得分为0但有统计数据的号码，给基础分
+        floor = _COLD_FLOOR if x_score == 0 and s_score > 0 else 0
+        final_red_score[n] = x_score + s_score + floor
 
     final_blue_score = {}
     for n in range(1, 17):
         x_score = xuanxue_blue_score.get(n, 0)
         s_score = stat_blue_score.get(n, 0) * 5
-        final_blue_score[n] = x_score + s_score
+        floor = _COLD_FLOOR if x_score == 0 and s_score > 0 else 0
+        final_blue_score[n] = x_score + s_score + floor
 
     # 红球排序
     sorted_red = sorted(final_red_score.items(), key=lambda x: (-x[1], x[0]))
@@ -3294,6 +3345,8 @@ async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5, birthd
 
     # ===== 格式化输出 =====
     lines = [f"【双色球融合选号（{solar_date}）】", ""]
+    if auto_reason:
+        lines.append(f"💡 {auto_reason}")
     lines.append(f"玄学有效维度权重（自适应·{mode}模式）：{_weight_str}")
     lines.append(f"统计权重：频率60% + 遗漏40%")
     _blue_weight_str = " / ".join(f"{k}×{v}" for k,v in _weights_blue.items() if v > 0)
