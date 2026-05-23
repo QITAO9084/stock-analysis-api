@@ -11,8 +11,8 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.2.0"
+    description="股票/加密货币分析API - V5.4（P0升级：ADX趋势强度+RSI背离检测+加权评分）",
+    version="5.4.0"
 )
 
 # 允许跨域
@@ -194,6 +194,124 @@ def calculate_bollinger_bands(data, period=20):
         "lower": round(lower.iloc[-1], 2)
     }
 
+def calculate_adx(data, period=14):
+    """计算 ADX 趋势强度指标
+
+    返回: {"adx": float, "plus_di": float, "minus_di": float, "trend": str}
+    trend: "strong_bull" (ADX>25 + +DI>-DI), "strong_bear" (ADX>25 + -DI>+DI),
+           "weak_bull", "weak_bear", "ranging" (ADX<20 无趋势)
+    """
+    high = data['High']
+    low = data['Low']
+    close = data['Close']
+
+    # True Range
+    tr1 = high - low
+    tr2 = abs(high - close.shift(1))
+    tr3 = abs(low - close.shift(1))
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    # Directional Movement
+    up_move = high - high.shift(1)
+    down_move = low.shift(1) - low
+
+    plus_dm = pd.Series(0.0, index=data.index)
+    minus_dm = pd.Series(0.0, index=data.index)
+
+    plus_dm[(up_move > down_move) & (up_move > 0)] = up_move
+    minus_dm[(down_move > up_move) & (down_move > 0)] = down_move
+
+    # Smooth with Wilder's method (EMA with alpha=1/period)
+    atr = tr.ewm(alpha=1/period, adjust=False).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1/period, adjust=False).mean() / atr)
+    minus_di = 100 * (minus_dm.ewm(alpha=1/period, adjust=False).mean() / atr)
+
+    # Directional Index (DX) and ADX
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    adx = dx.ewm(alpha=1/period, adjust=False).mean()
+
+    adx_val = round(adx.iloc[-1], 2) if not pd.isna(adx.iloc[-1]) else 20
+    pdi_val = round(plus_di.iloc[-1], 2) if not pd.isna(plus_di.iloc[-1]) else 25
+    mdi_val = round(minus_di.iloc[-1], 2) if not pd.isna(minus_di.iloc[-1]) else 25
+
+    # 趋势判断
+    if adx_val >= 25:
+        if pdi_val > mdi_val:
+            trend = "strong_bull"
+        else:
+            trend = "strong_bear"
+    elif adx_val >= 20:
+        if pdi_val > mdi_val:
+            trend = "weak_bull"
+        else:
+            trend = "weak_bear"
+    else:
+        trend = "ranging"
+
+    return {
+        "adx": adx_val,
+        "plus_di": pdi_val,
+        "minus_di": mdi_val,
+        "trend": trend
+    }
+
+def detect_rsi_divergence(data):
+    """检测 RSI 背离信号
+
+    顶背离：价格创新高，RSI 未创新高 → 看空反转信号
+    底背离：价格创新低，RSI 未创新低 → 看涨反转信号
+
+    返回: {"type": str, "description": str}
+    type: "bearish_divergence" / "bullish_divergence" / "none"
+    """
+    lookback = 20
+    if len(data) < lookback + 14:
+        return {"type": "none", "description": ""}
+
+    # 计算 RSI 完整序列
+    delta = data['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    rsi_series = 100 - (100 / (1 + rs))
+
+    # 取最近 lookback 天的价格和 RSI
+    recent_close = data['Close'].tail(lookback)
+    recent_rsi = rsi_series.tail(lookback)
+
+    # 找峰值和谷值
+    price_high = recent_close.max()
+    price_low = recent_close.min()
+
+    # 顶背离：价格创近期新高，RSI未创同期新高
+    price_high_idx = recent_close.idxmax()
+    rsi_high_in_window = recent_rsi.max()
+
+    # 价格创新高（当前价接近最高点）且 RSI 比同期高点低 5+ 个点
+    current_close = data['Close'].iloc[-1]
+    current_rsi = rsi_series.iloc[-1] if not pd.isna(rsi_series.iloc[-1]) else 50
+
+    if current_close >= price_high * 0.97:  # 当前价格接近或等于近期新高
+        if current_rsi < rsi_high_in_window - 5:  # RSI 明显低于同期 RSI 高点
+            return {
+                "type": "bearish_divergence",
+                "description": f"顶背离：价格接近{lookback}日高点({round(price_high,2)})，但RSI({round(current_rsi,1)})远低于同期RSI高点({round(rsi_high_in_window,1)})，上涨动能衰竭"
+            }
+
+    # 底背离：价格创近期新低，RSI未创同期新低
+    price_low_idx = recent_close.idxmin()
+    rsi_low_in_window = recent_rsi.min()
+
+    if current_close <= price_low * 1.03:  # 当前价格接近或等于近期新低
+        if current_rsi > rsi_low_in_window + 5:  # RSI 明显高于同期 RSI 低点
+            return {
+                "type": "bullish_divergence",
+                "description": f"底背离：价格接近{lookback}日低点({round(price_low,2)})，但RSI({round(current_rsi,1)})远高于同期RSI低点({round(rsi_low_in_window,1)})，下跌动能衰竭"
+            }
+
+    return {"type": "none", "description": ""}
+
+
 def calculate_volume_signal(data):
     """成交量分析：对比近20日均量"""
     if len(data) < 20:
@@ -227,6 +345,8 @@ def get_trading_signal(data, symbol):
     kdj_data = calculate_kdj(data)
     boll = calculate_bollinger_bands(data)
     vol_status, vol_ratio = calculate_volume_signal(data)
+    adx_data = calculate_adx(data)
+    rsi_divergence = detect_rsi_divergence(data)
 
     buy_score = 0
     sell_score = 0
@@ -348,6 +468,32 @@ def get_trading_signal(data, symbol):
         buy_signals.append(f"成交量萎缩（量比{vol_ratio}倍），市场观望情绪浓")
         # 缩量不加分不扣分，仅提示
 
+    # 7. ADX趋势强度评分（P0新增！）
+    adx_trend = adx_data["trend"]
+    if adx_trend == "strong_bull":
+        buy_signals.append(f"ADX={adx_data['adx']}，强势多头趋势（+DI={adx_data['plus_di']} > -DI={adx_data['minus_di']}）")
+        buy_score += 3
+    elif adx_trend == "strong_bear":
+        sell_signals.append(f"ADX={adx_data['adx']}，强势空头趋势（-DI={adx_data['minus_di']} > +DI={adx_data['plus_di']}）")
+        sell_score += 3
+    elif adx_trend == "weak_bull":
+        buy_signals.append(f"ADX={adx_data['adx']}，趋势偏多但强度不足")
+        buy_score += 1
+    elif adx_trend == "weak_bear":
+        sell_signals.append(f"ADX={adx_data['adx']}，趋势偏空但强度不足")
+        sell_score += 1
+    elif adx_trend == "ranging":
+        # 震荡市：不直接加分，但降低其他指标的权重（在第三阶段处理）
+        buy_signals.append(f"ADX={adx_data['adx']}，市场处于震荡格局，趋势信号可信度降低")
+
+    # 8. RSI背离检测（P0新增！——最可靠的反转信号）
+    if rsi_divergence["type"] == "bearish_divergence":
+        sell_signals.insert(0, f"⚠️ {rsi_divergence['description']}")
+        sell_score += 4  # 顶背离是最强卖出信号之一
+    elif rsi_divergence["type"] == "bullish_divergence":
+        buy_signals.insert(0, f"⚠️ {rsi_divergence['description']}")
+        buy_score += 4  # 底背离是最强买入信号之一
+
     # ---- 第二阶段：否决机制 ----
     # RSI极端超买（>85）→ 强制否决买入信号
     if rsi > 85 and buy_score > 0:
@@ -404,6 +550,8 @@ def get_trading_signal(data, symbol):
             "ma10": round(ma10, 2),
             "ma20": round(ma20, 2),
             "ma50": round(ma50, 2) if ma50 else None,
+            "adx": adx_data,
+            "rsi_divergence": rsi_divergence,
         },
         "volume_signal": vol_status,
         "volume_ratio": vol_ratio,
@@ -696,6 +844,13 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             "ma10": round(indicators["ma10"], 2),
             "ma20": round(indicators["ma20"], 2),
             "ma50": round(indicators["ma50"], 2) if indicators["ma50"] else 0,
+            # P0新增：ADX趋势强度 + RSI背离
+            "adx": round(indicators["adx"]["adx"], 2),
+            "adx_trend": str(indicators["adx"]["trend"]),
+            "plus_di": round(indicators["adx"]["plus_di"], 2),
+            "minus_di": round(indicators["adx"]["minus_di"], 2),
+            "rsi_divergence_type": str(indicators["rsi_divergence"]["type"]),
+            "rsi_divergence_desc": str(indicators["rsi_divergence"]["description"]),
             # 股票信息（扁平化）
             "market_cap": info.get("marketCap", 0),
             "pe_ratio": round(info.get("trailingPE", 0), 2),
@@ -778,6 +933,10 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us"):
                     "trend_direction": str(signal_data["trend_direction"]),
                     "support_level": signal_data["support_level"],
                     "resistance_level": signal_data["resistance_level"],
+                    "adx": round(indicators["adx"]["adx"], 2),
+                    "adx_trend": str(indicators["adx"]["trend"]),
+                    "rsi_divergence_type": str(indicators["rsi_divergence"]["type"]),
+                    "rsi_divergence_desc": str(indicators["rsi_divergence"]["description"]),
                     "status": "ok"
                 })
             except Exception as e:
@@ -802,6 +961,13 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us"):
             summary["best_performer"] = {"symbol": change_sorted[0]["symbol"], "change": change_sorted[0]["change_percent"]}
             # 跌幅最大
             summary["worst_performer"] = {"symbol": change_sorted[-1]["symbol"], "change": change_sorted[-1]["change_percent"]}
+            # ADX最强趋势（P0新增）
+            adx_sorted = sorted(valid_results, key=lambda x: x["adx"], reverse=True)
+            summary["strongest_trend"] = {"symbol": adx_sorted[0]["symbol"], "adx": adx_sorted[0]["adx"], "adx_trend": adx_sorted[0]["adx_trend"]}
+            # RSI背离股票（P0新增）
+            divergence_stocks = [r["symbol"] for r in valid_results if r["rsi_divergence_type"] != "none"]
+            if divergence_stocks:
+                summary["divergence_warnings"] = divergence_stocks
 
         return {
             "market": market,
@@ -1357,6 +1523,10 @@ def scan_stocks(
                     "macd_cross": str("golden" if signal_data["indicators"]["macd"]["golden_cross"] else ("death" if signal_data["indicators"]["macd"]["death_cross"] else "none")),
                     "volume_ratio": signal_data["volume_ratio"],
                     "trend_direction": str(signal_data["trend_direction"]),
+                    "adx": round(signal_data["indicators"]["adx"]["adx"], 2),
+                    "adx_trend": str(signal_data["indicators"]["adx"]["trend"]),
+                    "rsi_divergence_type": str(signal_data["indicators"]["rsi_divergence"]["type"]),
+                    "rsi_divergence_desc": str(signal_data["indicators"]["rsi_divergence"]["description"]),
                     "status": "ok"
                 })
             except Exception as e:
@@ -1370,6 +1540,11 @@ def scan_stocks(
         # 分类统计
         buy_stocks = [r for r in results if r["trade_point"] in ("strong_buy", "buy")]
         sell_stocks = [r for r in results if r["trade_point"] in ("strong_sell", "sell")]
+        # RSI背离股票（P0新增）
+        divergence_stocks = [
+            {"symbol": r["symbol"], "type": r["rsi_divergence_type"], "desc": r["rsi_divergence_desc"]}
+            for r in results if r.get("rsi_divergence_type") != "none"
+        ]
 
         return {
             "market": market,
@@ -1379,6 +1554,8 @@ def scan_stocks(
             "last_error": last_error if failed_count > 0 else "",
             "buy_count": len(buy_stocks),
             "sell_count": len(sell_stocks),
+            "divergence_count": len(divergence_stocks),
+            "divergence_stocks": divergence_stocks,
             "top_buy": buy_stocks[:3] if buy_stocks else [],
             "top_sell": sell_stocks[:3] if sell_stocks else [],
             "all_signals": results,
@@ -1472,6 +1649,11 @@ def get_trade_point_flat(symbol: str = "AAPL", market: str = "us"):
             "trend_direction": str(signal_data["trend_direction"]),
             "support_level": signal_data["support_level"],
             "resistance_level": signal_data["resistance_level"],
+            # P0新增：ADX趋势强度 + RSI背离
+            "adx": round(indicators["adx"]["adx"], 2),
+            "adx_trend": str(indicators["adx"]["trend"]),
+            "rsi_divergence_type": str(indicators["rsi_divergence"]["type"]),
+            "rsi_divergence_desc": str(indicators["rsi_divergence"]["description"]),
             # K线
             "kline_text": "\n".join(kline_text_lines),
         }
