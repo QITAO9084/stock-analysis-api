@@ -2456,7 +2456,7 @@ async def ssq_analysis(periods: int = 50):
     }
 
 
-@app.get("/ssq/backtest", tags=["双色球历史数据"])
+@ app.get("/ssq/backtest", tags=["双色球历史数据"])
 async def ssq_backtest(periods: int = 200, mode: str = "day_gan"):
     """
     双色球玄学维度回测验证
@@ -2477,10 +2477,38 @@ async def ssq_backtest(periods: int = 200, mode: str = "day_gan"):
     periods = min(periods, len(_SSQ_HISTORY))
     data = _SSQ_HISTORY[:periods]
 
-    if mode not in ("day_gan", "day_zhi", "majority"):
-        raise HTTPException(status_code=400, detail="mode参数错误，可选：day_gan / day_zhi / majority")
+    if mode not in ("day_gan", "day_zhi", "majority", "all"):
+        raise HTTPException(
+            status_code=400,
+            detail="mode参数错误，可选：day_gan / day_zhi / majority / all"
+        )
 
-    # 各维度统计
+    # 如果mode="all"，并行跑三种模式
+    if mode == "all":
+        results_all = {}
+        for m in ["day_gan", "day_zhi", "majority"]:
+            result = await _run_backtest(data, periods, m)
+            results_all[m] = result
+        # 对比三种模式，生成推荐
+        recommend = _compare_backtest_modes(results_all, periods)
+        return {
+            "periods_tested": periods,
+            "mode": "all",
+            "results_all": results_all,
+            "formatted_backtest_all": recommend["formatted"],
+            "recommend_mode": recommend["recommend_mode"],
+            "recommend_reason": recommend["reason"],
+        }
+
+    # 单模式回测
+    result = await _run_backtest(data, periods, mode)
+    return result
+
+
+async def _run_backtest(data, periods, mode):
+    """
+    内部函数：对指定数据和mode执行回测
+    """
     dim_stats = {
         "旺行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "生我行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
@@ -2488,18 +2516,17 @@ async def ssq_backtest(periods: int = 200, mode: str = "day_gan"):
         "克我行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "我克行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "纳音五行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
-        "月相": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "六柱干支": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "飞星方位": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
     }
 
-    _TIANGAN_LIST = ['甲','乙','丙','丁','戊','己','庚','辛','壬','癸']
-    _DIZHI_LIST = ['子','丑','寅','卯','辰','巳','午','未','申','酉','戌','亥']
-    month_dz_map_bt = {1:'丑', 2:'寅', 3:'卯', 4:'辰', 5:'巳', 6:'午',
-                    7:'未', 8:'申', 9:'酉', 10:'戌', 11:'亥', 12:'子'}
-    tg_start_map_bt = {'甲':'丙','己':'丙','乙':'戊','庚':'戊','丙':'庚','辛':'庚',
-                     '丁':'壬','壬':'壬','戊':'甲','癸':'甲'}
-    month_dz_order_bt = ['寅','卯','辰','巳','午','未','申','酉','戌','亥','子','丑']
+    _TIANGAN_LIST = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸']
+    _DIZHI_LIST = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥']
+    month_dz_map_bt = {1: '丑', 2: '寅', 3: '卯', 4: '辰', 5: '巳', 6: '午',
+                      7: '未', 8: '申', 9: '酉', 10: '戌', 11: '亥', 12: '子'}
+    tg_start_map_bt = {'甲': '丙', '己': '丙', '乙': '戊', '庚': '戊', '丙': '庚', '辛': '庚',
+                       '丁': '壬', '壬': '壬', '戊': '甲', '癸': '甲'}
+    month_dz_order_bt = ['寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥', '子', '丑']
 
     from datetime import date as date_cls
     from lunarcalendar import Converter, Solar
@@ -2555,9 +2582,6 @@ async def ssq_backtest(periods: int = 200, mode: str = "day_gan"):
         except:
             continue
 
-        # 月相
-        moon_phase = _MOON_PHASE.get(lunar_day, "未知")
-
         # 实际开奖号码
         actual_red = set(rec["red"])
         actual_blue = rec["blue"]
@@ -2600,12 +2624,6 @@ async def ssq_backtest(periods: int = 200, mode: str = "day_gan"):
                         set(_WUXING_MAP[nayin_wuxing]["red_balls"]),
                         set(_WUXING_MAP[nayin_wuxing]["blue_balls"]))
 
-        # 月相
-        if moon_phase and moon_phase in _MOON_PHASE_RED:
-            _count_dim("月相",
-                        set(_MOON_PHASE_RED[moon_phase]),
-                        set(_MOON_PHASE_BLUE.get(moon_phase, [])))
-
         # 六柱干支
         liuzhu_red = set()
         liuzhu_blue = set()
@@ -2624,7 +2642,6 @@ async def ssq_backtest(periods: int = 200, mode: str = "day_gan"):
 
     # 计算命中率
     results = []
-
     for dim_name, stats in dim_stats.items():
         if stats["red_total"] == 0:
             continue
@@ -2641,7 +2658,7 @@ async def ssq_backtest(periods: int = 200, mode: str = "day_gan"):
         elif red_lift < -2:
             verdict = "❌负面"
         else:
-            verdict = "⚖️中性"
+            verdict = "⚠️中性"
 
         results.append({
             "dimension": dim_name,
@@ -2660,7 +2677,7 @@ async def ssq_backtest(periods: int = 200, mode: str = "day_gan"):
 
     # 格式化输出
     lines = [f"【双色球玄学维度回测验证（近{periods}期，模式={mode}）】", ""]
-    lines.append(f"基准：红球随机命中率≈{round(6/33*100,2)}%/球，蓝球随机命中率≈{round(1/16*100,2)}%")
+    lines.append(f"基准：红球随机命中率≈{round(6 / 33 * 100, 2)}%/球，蓝球随机命中率≈{round(1 / 16 * 100, 2)}%")
     lines.append(f"提升值=实际命中率-期望命中率，>0=优于随机，<0=劣于随机")
     lines.append("")
     lines.append(f"{'维度':<10} {'红球命中':>8} {'红球命中率':>8} {'期望率':>6} {'提升':>6} {'蓝球命中率':>8} {'蓝球提升':>6} {'判定'}")
@@ -2687,6 +2704,68 @@ async def ssq_backtest(periods: int = 200, mode: str = "day_gan"):
         "details": results,
     }
 
+
+def _compare_backtest_modes(results_all, periods):
+    """
+    对比三种模式的回测结果，生成formatted输出和推荐
+    """
+    mode_scores = {}
+    for mode, result in results_all.items():
+        details = result.get("details", [])
+        red_lift_sum = sum(d["red_lift"] for d in details)
+        blue_lift_sum = sum(d["blue_lift"] for d in details if d["blue_total"] > 0)
+        valid_count = sum(1 for d in details if d["verdict"] == "✅有效")
+        negative_count = sum(1 for d in details if d["verdict"] == "❌负面")
+        mode_scores[mode] = {
+            "red_lift_sum": red_lift_sum,
+            "blue_lift_sum": blue_lift_sum,
+            "valid_count": valid_count,
+            "negative_count": negative_count,
+            "score": red_lift_sum + blue_lift_sum * 0.5,
+        }
+
+    sorted_modes = sorted(mode_scores.items(), key=lambda x: x[1]["score"], reverse=True)
+    best_mode = sorted_modes[0][0]
+    best_score = sorted_modes[0][1]
+
+    lines = [f"【多模式回测对比（近{periods}期）】", ""]
+    lines.append(f"{'模式':<12} {'红球提升∑':>10} {'蓝球提升∑':>10} {'有效维度':>8} {'负面维度':>8} {'综合得分':>8}")
+    lines.append("-" * 70)
+
+    mode_names = {"day_gan": "日干模式", "day_zhi": "日支模式", "majority": "六柱众数"}
+    for mode, scores in sorted_modes:
+        lines.append(
+            f"{mode_names.get(mode, mode):<12} "
+            f"{scores['red_lift_sum']:>+8}% "
+            f"{scores['blue_lift_sum']:>+8}% "
+            f"{scores['valid_count']:>6}个 "
+            f"{scores['negative_count']:>6}个 "
+            f"{scores['score']:>+7.2f}"
+        )
+
+    lines.append("")
+    lines.append(f"🏆 推荐模式：{mode_names.get(best_mode, best_mode)}")
+    lines.append(f"   综合得分最高（{best_score['score']:+.2f}），红球提升∑{best_score['red_lift_sum']:+.2f}%，有效维度{best_score['valid_count']}个")
+
+    lines.append("")
+    lines.append("📊 各模式有效维度（提升值>2%）：")
+    for mode, result in results_all.items():
+        valid_dims = [d for d in result.get("details", []) if d["verdict"] == "✅有效"]
+        dim_str = "、".join([d["dimension"] for d in valid_dims]) if valid_dims else "无"
+        lines.append(f"  {mode_names.get(mode, mode)}：{dim_str}")
+
+    lines.append("")
+    lines.append("💡 使用建议：")
+    lines.append(f"  1. 在/ssq/pick接口中使用 mode={best_mode} 参数")
+    lines.append(f"  2. 融合选号将自动采用「{mode_names.get(best_mode, best_mode)}」的计算结果")
+
+    formatted = "\n".join(lines)
+
+    return {
+        "formatted": formatted,
+        "recommend_mode": best_mode,
+        "reason": f"综合得分最高（{best_score['score']:+.2f}），红球提升∑{best_score['red_lift_sum']:+.2f}%",
+    }
 
 @app.get("/ssq/pick", tags=["双色球历史数据"])
 async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5):
