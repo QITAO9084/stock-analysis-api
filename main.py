@@ -2018,18 +2018,17 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
         for n in hour_blue_all:
             blue_heat[n] = blue_heat.get(n, 0) + 1
 
-    # 维度9：出生信息（v3.4，权重×1）
+    # 维度9：出生信息（v3.5，生我行权重×2，克我行×0负面）
     if birthday and b_shengke:
         for n in _WUXING_MAP[b_shengke["旺行"]]["red_balls"]:
             red_heat[n] = red_heat.get(n, 0) + 1
         for n in _WUXING_MAP[b_shengke["旺行"]]["blue_balls"]:
             blue_heat[n] = blue_heat.get(n, 0) + 1
         for n in _WUXING_MAP[b_shengke["生我行"]]["red_balls"]:
-            red_heat[n] = red_heat.get(n, 0) + 1
-        for n in _WUXING_MAP[b_shengke["克我行"]]["red_balls"]:
-            red_heat[n] = red_heat.get(n, 0) + 1
-        for n in _WUXING_MAP[b_shengke["克我行"]]["blue_balls"]:
+            red_heat[n] = red_heat.get(n, 0) + 2  # v3.5: +3.03%有效，权重×2
+        for n in _WUXING_MAP[b_shengke["生我行"]]["blue_balls"]:
             blue_heat[n] = blue_heat.get(n, 0) + 1
+        # v3.5: 克我行-3.25%负面，不参与热度
         for n in _TIANGAN_MAP[b_day_gan]["red_balls"]:
             red_heat[n] = red_heat.get(n, 0) + 1
         for n in _DIZHI_RED_MAP[b_day_zhi]["red_balls"]:
@@ -3116,7 +3115,7 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
         for n in bagua["blue_balls"]:
             xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + _weights_blue["飞星"]
 
-    # ===== v3.4 出生维度（可选，权重×1） =====
+    # ===== v3.5 出生维度（可选，权重基于回测） =====
     b_day_gan_p = b_day_zhi_p = b_day_wuxing_p = b_shengke_p = None
     birth_weight_str = ""
     if birthday:
@@ -3128,9 +3127,9 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
             b_day_zhi_p = _DZ[b_diff_p % 12]
             b_day_wuxing_p = _TIANGAN_MAP[b_day_gan_p]["wuxing"]
             b_shengke_p = _get_shengke_info(b_day_wuxing_p)
-            # 出生维度权重（保守值，后续回测调优）
-            BIRTH_WEIGHTS = {"旺行": 1, "生我行": 1, "克我行": 1, "我生行·泄": 1}
-            BIRTH_WEIGHTS_BLUE = {"旺行": 1, "克我行": 1, "生我行": 0, "我生行·泄": 0}
+            # v3.5 出生维度权重（基于2144期回测：生我行+3.03%有效，克我行-3.25%负面）
+            BIRTH_WEIGHTS = {"旺行": 1, "生我行": 2, "克我行": 0, "我生行·泄": 0}
+            BIRTH_WEIGHTS_BLUE = {"旺行": 1, "克我行": 0, "生我行": 1, "我生行·泄": 0}
             # 红球
             for n in _WUXING_MAP[b_shengke_p["旺行"]]["red_balls"]:
                 xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + BIRTH_WEIGHTS["旺行"]
@@ -3147,10 +3146,12 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
             # 蓝球
             for n in _WUXING_MAP[b_shengke_p["旺行"]]["blue_balls"]:
                 xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + BIRTH_WEIGHTS_BLUE["旺行"]
+            for n in _WUXING_MAP[b_shengke_p["生我行"]]["blue_balls"]:
+                xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + BIRTH_WEIGHTS_BLUE["生我行"]
             for n in _WUXING_MAP[b_shengke_p["克我行"]]["blue_balls"]:
                 xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + BIRTH_WEIGHTS_BLUE["克我行"]
             xuanxue_blue_score[_DIZHI_BLUE_MAP[b_day_zhi_p]] = xuanxue_blue_score.get(_DIZHI_BLUE_MAP[b_day_zhi_p], 0) + 1
-            birth_weight_str = f"出生({b_day_gan_p}{b_day_zhi_p}日·{b_day_wuxing_p}行) 旺行×1/生我×1/克我×1/泄×1"
+            birth_weight_str = f"出生({b_day_gan_p}{b_day_zhi_p}日·{b_day_wuxing_p}行) 旺行×1/生我×2/克我×0/泄×0"
         except:
             pass  # birthday参数错误时静默忽略，不影响主流程
 
