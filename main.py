@@ -19,8 +19,8 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.17.9（ADX过滤：买卖点标注+操作建议降权+信号原因平衡）",
-    version="5.17.9",
+    description="股票/加密货币分析API - V5.18（资金流向OBV+MFI+CMF+VWAP 14维评分）",
+    version="5.18.0",
     servers=[{"url": "https://stock-analysis-api-n741.onrender.com", "description": "Render部署"}],
 )
 
@@ -411,6 +411,11 @@ def get_trading_signal(data, symbol):
     vol_status, vol_ratio = calculate_volume_signal(data)
     adx_data = calculate_adx(data)
     rsi_divergence = detect_rsi_divergence(data)
+    # V5.18: 资金流向指标
+    obv_data = calculate_obv(data)
+    mfi_data = calculate_mfi(data)
+    cmf_data = calculate_cmf(data)
+    vwap_data = calculate_vwap(data)
 
     buy_score = 0
     sell_score = 0
@@ -563,6 +568,43 @@ def get_trading_signal(data, symbol):
     elif rsi_divergence["type"] == "bullish_divergence":
         buy_signals.insert(0, f"⚠️ {rsi_divergence['description']}")
         buy_score += 4  # 底背离是最强买入信号之一
+
+    # V5.18: 9-12. 资金流向评分（OBV背离/MFI/CMF/VWAP）
+    # OBV背离
+    if obv_data["divergence"] == "bullish":
+        buy_signals.insert(0, obv_data["desc"])
+        buy_score += 3  # 底背离=资金暗中吸筹
+    elif obv_data["divergence"] == "bearish":
+        sell_signals.insert(0, obv_data["desc"])
+        sell_score += 3  # 顶背离=资金暗中撤退
+    elif obv_data["desc"]:
+        buy_signals.append(obv_data["desc"])
+        buy_score += 1
+
+    # MFI超买超卖
+    if mfi_data["zone"] == "超卖":
+        buy_signals.append(f"MFI={mfi_data['mfi']}，资金流量超卖，短期可能回流")
+        buy_score += 2
+    elif mfi_data["zone"] == "超买":
+        sell_signals.append(f"MFI={mfi_data['mfi']}，资金流量超买，短期可能出逃")
+        sell_score += 2
+
+    # CMF 资金流向
+    if cmf_data["cmf"] > 0.15:
+        buy_signals.append(f"CMF={cmf_data['cmf']}，资金持续流入，买方主导")
+        buy_score += 2
+    elif cmf_data["cmf"] < -0.15:
+        sell_signals.append(f"CMF={cmf_data['cmf']}，资金持续流出，卖方主导")
+        sell_score += 2
+
+    # VWAP 位置
+    vwap_pos_text = "上方" if vwap_data["position"] == "above" else "下方"
+    if vwap_data["position"] == "above" and vwap_data["distance"] > 1:
+        buy_signals.append(f"价格高于VWAP（+{vwap_data['distance']}%），买方主导")
+        buy_score += 1
+    elif vwap_data["position"] == "below" and abs(vwap_data["distance"]) > 1:
+        sell_signals.append(f"价格低于VWAP（{vwap_data['distance']}%），卖方主导")
+        sell_score += 1
 
     # ---- 第二阶段：否决机制 ----
     # RSI极端超买（>85）→ 强制否决买入信号
@@ -880,6 +922,12 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
         cp_text = "；".join([f"{cp['pattern']}({cp['desc']})" for cp in candle_patterns]) if candle_patterns else "无特殊形态"
         vd_text = "；".join([f"{'🟢' if vd['type']=='bullish' else '🔴'}{vd['desc']}" for vd in vol_divergences]) if vol_divergences else "未检测到价量背离"
 
+        # V5.18: 资金流向指标（OBV/MFI/CMF/VWAP）
+        obv_data = calculate_obv(data)
+        mfi_data = calculate_mfi(data)
+        cmf_data = calculate_cmf(data)
+        vwap_data = calculate_vwap(data)
+
         # V5.13: 信号准确率回测
         accuracy_data = compute_signal_accuracy(data)
 
@@ -990,6 +1038,10 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             vol_divergences=vol_divergences,
             atr=trade_points.get("atr"),
             fundamentals=fundamentals,
+            obv_data=obv_data,
+            mfi=mfi_data["mfi"],
+            cmf=cmf_data["cmf"],
+            vwap_data=vwap_data,
         )
 
         return {
@@ -1550,6 +1602,10 @@ def detect_trade_points(data, symbol):
     vol_status, vol_ratio = calculate_volume_signal(data)
     adx_data = calculate_adx(data)                      # V5.9: ADX趋势强度
     divergence_data = detect_rsi_divergence(data)        # V5.9: RSI背离检测
+    obv_data = calculate_obv(data)                       # V5.18: OBV资金流向
+    mfi_data = calculate_mfi(data)                       # V5.18: MFI资金流量
+    cmf_data = calculate_cmf(data)                       # V5.18: CMF蔡金资金流
+    vwap_data = calculate_vwap(data)                     # V5.18: VWAP加权均价
 
     ma5 = data['Close'].rolling(window=5).mean().iloc[-1]
     ma10 = data['Close'].rolling(window=10).mean().iloc[-1]
@@ -1710,6 +1766,39 @@ def detect_trade_points(data, symbol):
         elif vd["type"] == "bearish":
             sell_reasons.append(f"成交量背离：{vd['desc']}")
             sell_count += abs(vd["score"]) * 0.5
+
+    # ========== V5.18: 资金流向指标 ==========
+    # 11. OBV背离（权重 1.5 分）
+    if obv_data["divergence"] == "bullish":
+        buy_reasons.append(f"OBV底背离：{obv_data['desc']}")
+        buy_count += 1.5
+    elif obv_data["divergence"] == "bearish":
+        sell_reasons.append(f"OBV顶背离：{obv_data['desc']}")
+        sell_count += 1.5
+
+    # 12. MFI超买超卖（权重 1.0 分）
+    if mfi_data["zone"] == "超卖":
+        buy_reasons.append(f"MFI={mfi_data['mfi']}，资金流量极度超卖")
+        buy_count += 1.0
+    elif mfi_data["zone"] == "超买":
+        sell_reasons.append(f"MFI={mfi_data['mfi']}，资金流量极度超买")
+        sell_count += 1.0
+
+    # 13. CMF资金流向（权重 1.0 分）
+    if cmf_data["cmf"] > 0.15:
+        buy_reasons.append(f"CMF={cmf_data['cmf']}，资金持续流入（买方主导）")
+        buy_count += 1.0
+    elif cmf_data["cmf"] < -0.15:
+        sell_reasons.append(f"CMF={cmf_data['cmf']}，资金持续流出（卖方主导）")
+        sell_count += 1.0
+
+    # 14. VWAP位置（权重 0.5 分）
+    if vwap_data["position"] == "above" and abs(vwap_data["distance"]) > 2:
+        buy_reasons.append(f"价格高于VWAP（+{vwap_data['distance']}%），买方主导")
+        buy_count += 0.5
+    elif vwap_data["position"] == "below" and abs(vwap_data["distance"]) > 2:
+        sell_reasons.append(f"价格低于VWAP（{vwap_data['distance']}%），卖方主导")
+        sell_count += 0.5
 
     # ========== 综合判断 ==========
 
@@ -2074,6 +2163,117 @@ def detect_volume_divergence(closes, volumes):
     return divergences
 
 
+# ==================== V5.18: 资金流向技术指标 ====================
+
+def calculate_obv(data):
+    """
+    On-Balance Volume (OBV) — 能量潮
+
+    涨日：OBV += 成交量；跌日：OBV -= 成交量；平盘：不变
+    返回：OBV背离状态（价格与OBV走势背离=聪明钱反向操作）
+    """
+    obv = [0]
+    for i in range(1, len(data)):
+        if data['Close'].iloc[i] > data['Close'].iloc[i-1]:
+            obv.append(obv[-1] + data['Volume'].iloc[i])
+        elif data['Close'].iloc[i] < data['Close'].iloc[i-1]:
+            obv.append(obv[-1] - data['Volume'].iloc[i])
+        else:
+            obv.append(obv[-1])
+    obv_series = pd.Series(obv, index=data.index)
+
+    # 近20日价格和OBV趋势
+    price_20d = (data['Close'].iloc[-1] / data['Close'].iloc[-20] - 1) * 100 if len(data) >= 20 else 0
+    obv_base = max(abs(obv_series.iloc[-20]), 1) if len(data) >= 20 else 1
+    obv_20d = ((obv_series.iloc[-1] - obv_series.iloc[-20]) / obv_base * 100) if len(data) >= 20 else 0
+
+    divergence = "none"
+    div_desc = ""
+    if price_20d > 3 and obv_20d < -5:
+        divergence = "bearish"
+        div_desc = f"OBV顶背离（价涨{price_20d}%但OBV跌{abs(obv_20d)}%，资金暗中撤退）"
+    elif price_20d < -3 and obv_20d > 5:
+        divergence = "bullish"
+        div_desc = f"OBV底背离（价跌{abs(price_20d)}%但OBV涨{obv_20d}%，资金暗中吸筹）"
+    elif len(data) >= 20 and obv_20d > 10:
+        div_desc = f"OBV持续流入（近20日+{obv_20d}%），资金积极进场"
+
+    return {
+        "divergence": divergence,
+        "desc": div_desc,
+        "obv_20d": round(obv_20d, 1),
+    }
+
+
+def calculate_mfi(data, period=14):
+    """
+    Money Flow Index (MFI) — 资金流量指数
+
+    价格+成交量的RSI升级版。>80=超买资金出逃，<20=超卖资金回流
+    """
+    typical_price = (data['High'] + data['Low'] + data['Close']) / 3
+    money_flow = typical_price * data['Volume']
+
+    positive_flow = []
+    negative_flow = []
+    for i in range(1, len(data)):
+        if typical_price.iloc[i] > typical_price.iloc[i-1]:
+            positive_flow.append(money_flow.iloc[i])
+            negative_flow.append(0)
+        elif typical_price.iloc[i] < typical_price.iloc[i-1]:
+            positive_flow.append(0)
+            negative_flow.append(money_flow.iloc[i])
+        else:
+            positive_flow.append(0)
+            negative_flow.append(0)
+
+    pf_series = pd.Series(positive_flow, index=data.index[1:])
+    nf_series = pd.Series(negative_flow, index=data.index[1:])
+
+    if len(pf_series) < period:
+        return {"mfi": 50, "zone": "中性"}
+
+    pf_sum = pf_series.rolling(period).sum()
+    nf_sum = nf_series.rolling(period).sum()
+    mfi_ratio = pf_sum / nf_sum.replace(0, float('nan'))
+    mfi_series = 100 - (100 / (1 + mfi_ratio))
+
+    mfi_val = round(mfi_series.iloc[-1], 1) if not pd.isna(mfi_series.iloc[-1]) else 50
+    zone = "超买" if mfi_val > 80 else ("超卖" if mfi_val < 20 else "中性")
+    return {"mfi": mfi_val, "zone": zone}
+
+
+def calculate_cmf(data, period=20):
+    """
+    Chaikin Money Flow (CMF) — 蔡金资金流
+
+    用收盘价在当日高低区的位置判断资金流入强度
+    CMF > 0.1 = 持续流入，CMF < -0.1 = 持续流出
+    """
+    hl_range = data['High'] - data['Low']
+    mf_mult = ((data['Close'] - data['Low']) - (data['High'] - data['Close'])) / hl_range.replace(0, float('nan'))
+    mf_volume = mf_mult * data['Volume']
+    cmf_series = mf_volume.rolling(period).sum() / data['Volume'].rolling(period).sum()
+    cmf_val = round(cmf_series.iloc[-1], 3) if not pd.isna(cmf_series.iloc[-1]) else 0
+    return {"cmf": cmf_val}
+
+
+def calculate_vwap(data):
+    """
+    Volume Weighted Average Price (VWAP) — 成交量加权均价
+
+    机构常用基准价。价格 > VWAP = 买方主导；价格 < VWAP = 卖方主导
+    """
+    typical_price = (data['High'] + data['Low'] + data['Close']) / 3
+    cum_pv = (typical_price * data['Volume']).sum()
+    cum_vol = data['Volume'].sum()
+    vwap = cum_pv / cum_vol if cum_vol > 0 else data['Close'].iloc[-1]
+    current = data['Close'].iloc[-1]
+    distance = round((current - vwap) / vwap * 100, 2)
+    position = "above" if current > vwap else "below"
+    return {"vwap": round(vwap, 2), "position": position, "distance": distance}
+
+
 def compute_signal_accuracy(data):
     """
     V5.17: 信号准确率回测 — 使用与 detect_trade_points 完全一致的10维评分逻辑。
@@ -2342,7 +2542,8 @@ def build_formatted_report(
     support_level, resistance_level,
     kline_text, rsi_div_type, rsi_div_desc,
     accuracy_data=None, weekly_trend=None, monthly_trend=None, market_trend=None,
-    candle_patterns=None, vol_divergences=None, atr=None, fundamentals=None
+    candle_patterns=None, vol_divergences=None, atr=None, fundamentals=None,
+    obv_data=None, mfi=None, cmf=None, vwap_data=None
 ):
     """
     V5.14: API层预渲染完整中文分析报告（含多周期共振+大盘环境+信号准确率回测）。
@@ -2556,6 +2757,65 @@ def build_formatted_report(
     elif current_price >= boll_upper * 0.99:
         boll_score = -3
     lines.append(f"  布林带：{boll_score}分（上轨{boll_upper}，下轨{boll_lower}）")
+    # V5.18: 资金流向评分
+    obv_score = 0
+    obv_label = "无背离"
+    if obv_data:
+        if obv_data["divergence"] == "bullish":
+            obv_score = 10
+            obv_label = "🟢底背离（资金吸筹）"
+        elif obv_data["divergence"] == "bearish":
+            obv_score = -10
+            obv_label = "🔴顶背离（资金撤退）"
+        elif obv_data.get("desc"):
+            obv_score = 3
+            obv_label = "🟢持续流入"
+    lines.append(f"  OBV能量潮：{obv_score}分（{obv_label}）")
+
+    mfi_score = 0
+    mfi_label = "中性"
+    if mfi is not None:
+        if mfi > 80:
+            mfi_score = -10
+            mfi_label = f"超买（{mfi}）"
+        elif mfi < 20:
+            mfi_score = 10
+            mfi_label = f"超卖（{mfi}）"
+        else:
+            mfi_label = f"{mfi}"
+    lines.append(f"  MFI资金流：{mfi_score}分（{mfi_label}）")
+
+    cmf_score = 0
+    cmf_label = "中性"
+    if cmf is not None:
+        if cmf > 0.15:
+            cmf_score = 8
+            cmf_label = f"🟢持续流入（{cmf}）"
+        elif cmf < -0.15:
+            cmf_score = -8
+            cmf_label = f"🔴持续流出（{cmf}）"
+        elif cmf > 0.05:
+            cmf_score = 3
+            cmf_label = f"🟢偏流入（{cmf}）"
+        elif cmf < -0.05:
+            cmf_score = -3
+            cmf_label = f"🔴偏流出（{cmf}）"
+        else:
+            cmf_label = f"{cmf}"
+    lines.append(f"  CMF蔡金流：{cmf_score}分（{cmf_label}）")
+
+    vwap_score = 0
+    vwap_label = f"${vwap_data['vwap']}" if vwap_data else "—"
+    if vwap_data:
+        if vwap_data["position"] == "above" and vwap_data["distance"] > 1:
+            vwap_score = 3
+            vwap_label = f"🟢高于VWAP（+{vwap_data['distance']}%）"
+        elif vwap_data["position"] == "below" and abs(vwap_data["distance"]) > 1:
+            vwap_score = -3
+            vwap_label = f"🔴低于VWAP（{vwap_data['distance']}%）"
+        else:
+            vwap_label = f"${vwap_data['vwap']}（接近）"
+    lines.append(f"  VWAP均价：{vwap_score}分（{vwap_label}）")
     lines.append("  " + "-" * 35)
     # V5.17.1: 多周期一致性折扣（提前计算，应用于总分）
     mt_discount = 0
@@ -2569,7 +2829,7 @@ def build_formatted_report(
             mt_discount = 10  # 三线共振 +10
         elif bullish_count == 0 and bearish_count == 0:
             mt_discount = -5  # 三线分歧 -5
-    total_score = div_score + adx_score + macd_score + kdj_score + rsi_score + ma_score + vol_score + boll_score + cp_score + vd_score
+    total_score = div_score + adx_score + macd_score + kdj_score + rsi_score + ma_score + vol_score + boll_score + cp_score + vd_score + obv_score + mfi_score + cmf_score + vwap_score
     # V5.14: 大盘环境系数调整
     total_score = total_score * market_coef
     # V5.17.1: 多周期一致性折扣
