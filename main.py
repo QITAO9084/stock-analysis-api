@@ -847,21 +847,6 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
         trade_points = detect_trade_points(data, symbol)
         indicators = signal_data["indicators"]
 
-        # V5.17.2: 修复信号与买卖点不一致导致的 entry/stop 为空
-        # 当 get_trading_signal 返回 HOLD 但 detect_trade_points 返回 sell/strong_sell 时，
-        # sell 分支的 entry=0/stop=0 会导致报告显示 "—"，覆盖为 hold 分支计算
-        if (signal_data["signal"] == "HOLD"
-                and trade_points["trade_point"] in ("sell", "strong_sell")
-                and trade_points["entry_price"] == 0):
-            cur_p = round(data['Close'].iloc[-1], 2)
-            atr_val = trade_points.get("atr", 0)
-            ep = round(cur_p * 0.995, 2)
-            sl = round(ep - atr_val * 2, 2) if atr_val else 0
-            tp = round(ep + atr_val * 3, 2) if atr_val else 0
-            trade_points["entry_price"] = ep
-            trade_points["stop_loss"] = sl
-            trade_points["take_profit"] = tp
-
         current_price = round(data['Close'].iloc[-1], 2)
         prev_close = round(data['Close'].iloc[-2], 2) if len(data) > 1 else current_price
         change_percent = round((current_price - prev_close) / prev_close * 100, 2) if prev_close != 0 else 0
@@ -1734,9 +1719,10 @@ def detect_trade_points(data, symbol):
         stop_loss = round(entry_price - atr * 2, 2)         # 2倍ATR动态止损
         take_profit = round(entry_price + atr * 3, 2)       # 3倍ATR止盈
     elif trade_point in ("strong_sell", "sell"):
-        entry_price = 0
-        stop_loss = 0
-        take_profit = round(recent_low * 1.02, 2)
+        # V5.17.4: sell 信号也给出完整价格建议（不再设0）
+        entry_price = round(current_price * 0.995, 2)       # 建议卖出价（稍低于当前价作为保守估计）
+        stop_loss = round(entry_price + atr * 2, 2)         # 反弹止损位（价格涨破此位则卖出信号失效）
+        take_profit = round(recent_low * 1.02, 2)           # 目标止盈价（接近近期低点）
     else:
         entry_price = round(current_price * 0.995, 2)       # V5.16: 观望也给出入场参考
         stop_loss = round(entry_price - atr * 2, 2)         # 2倍ATR动态止损
@@ -3472,19 +3458,6 @@ def get_trade_point_flat(symbol: str = "AAPL", market: str = "us"):
         signal_data = get_trading_signal(data, symbol)
         trade_points = detect_trade_points(data, symbol)
         indicators = signal_data["indicators"]
-
-        # V5.17.3: HOLD+sell/strong_sell 时重算 entry/stop（与 analyze2 保持一致）
-        if (signal_data["signal"] == "HOLD"
-                and trade_points["trade_point"] in ("sell", "strong_sell")
-                and trade_points["entry_price"] == 0):
-            cur_p = round(data['Close'].iloc[-1], 2)
-            atr_val = trade_points.get("atr", 0)
-            ep = round(cur_p * 0.995, 2)
-            sl = round(ep - atr_val * 2, 2) if atr_val else 0
-            tp = round(ep + atr_val * 3, 2) if atr_val else 0
-            trade_points["entry_price"] = ep
-            trade_points["stop_loss"] = sl
-            trade_points["take_profit"] = tp
 
         current_price = round(data['Close'].iloc[-1], 2)
         prev_close = round(data['Close'].iloc[-2], 2) if len(data) > 1 else current_price
