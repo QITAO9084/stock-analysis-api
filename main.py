@@ -4,7 +4,14 @@ from fastapi.responses import JSONResponse
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+CN_TZ = ZoneInfo("Asia/Shanghai")
+
+def now_cn():
+    """返回北京时间 ISO 字符串"""
+    return datetime.now(CN_TZ).isoformat()
 from typing import Optional
 import time
 import json
@@ -615,7 +622,7 @@ def get_trading_signal(data, symbol):
         "support_level": round(recent_low, 2),
         "resistance_level": round(recent_high, 2),
         "trend_direction": "bullish" if (buy_score > sell_score) else ("bearish" if (sell_score > buy_score) else "neutral"),
-        "timestamp": datetime.now().isoformat()
+        "timestamp": now_cn()
     }
 
 @app.get("/")
@@ -656,7 +663,7 @@ def get_stock_info(symbol: str = "AAPL", market: str = "us"):
             "52w_low": info.get("fiftyTwoWeekLow", 0),
             "volume": info.get("volume", 0),
             "currency": info.get("currency", "USD"),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": now_cn()
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取股票信息失败: {str(e)}")
@@ -781,7 +788,7 @@ def analyze_stock(symbol: str = "AAPL", market: str = "us"):
             "change_percent": change_percent,
             "currency": info.get("currency", "USD"),
             "market": market,
-            "analysis_time": datetime.now().isoformat(),
+            "analysis_time": now_cn(),
             "signal": signal_data["signal"],
             "confidence": signal_data["confidence"],
             "key_signals": signal_data["signals"],
@@ -922,7 +929,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             "change_percent": change_percent,
             "currency": str(info.get("currency", "USD")),
             "market": str(market),
-            "analysis_time": datetime.now().isoformat(),
+            "analysis_time": now_cn(),
             # V5.13: 预渲染报告（Agent直接输出，无需加工）
             "formatted_report": formatted_report,
             # V5.13: 信号准确率回测数据
@@ -1085,7 +1092,7 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us"):
             if divergence_stocks:
                 summary["divergence_warnings"] = divergence_stocks
 
-        analysis_time = datetime.now().isoformat()
+        analysis_time = now_cn()
         return {
             "market": market,
             "total": len(results),
@@ -1161,7 +1168,7 @@ def analyze_crypto(symbol: str = "BTC-USD"):
             "change_percent": change_percent,
             "currency": "USD",
             "asset_type": "crypto",
-            "analysis_time": datetime.now().isoformat(),
+            "analysis_time": now_cn(),
             # 买卖信号
             "signal": str(signal_data["signal"]),
             "confidence": str(signal_data["confidence"]),
@@ -1342,7 +1349,7 @@ def analyze_forex(pair: str = "USDCNY"):
             "volatility_20d": volatility_20d,
             "is_reversed": yf_symbol in REVERSED_PAIRS,
             "asset_type": "forex",
-            "analysis_time": datetime.now().isoformat(),
+            "analysis_time": now_cn(),
             # 买卖信号
             "signal": str(signal_data["signal"]),
             "confidence": str(signal_data["confidence"]),
@@ -2646,7 +2653,7 @@ def scan_stocks(
             for r in results if r.get("rsi_divergence_type") != "none"
         ]
 
-        scan_time = datetime.now().isoformat()
+        scan_time = now_cn()
         return {
             "market": market,
             "total_scanned": len(symbol_list),
@@ -2767,7 +2774,7 @@ def get_trade_point_flat(symbol: str = "AAPL", market: str = "us"):
             "change_percent": change_percent,
             "currency": str(info.get("currency", "USD")),
             "market": str(market),
-            "analysis_time": datetime.now().isoformat(),
+            "analysis_time": now_cn(),
             # V5.11: 预渲染报告（Agent直接输出）
             "formatted_report": formatted_report,
             "trade_point": str(trade_points["trade_point"]),
