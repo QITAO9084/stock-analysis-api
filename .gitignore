@@ -4,4 +4,16 @@ __pycache__/
 *.pyd
 .env
 venv/
-.env
+env/
+
+# WorkBuddy local files
+.workbuddy/
+.codebuddy/
+
+# IDE
+.vscode/
+.idea/
+
+# Windows reserved names
+nul
+nul.*
