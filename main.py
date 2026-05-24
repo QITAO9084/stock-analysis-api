@@ -19,7 +19,7 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.18.1（股息率自算+RSI超买操作建议风控）",
+    description="股票/加密货币分析API - V5.18.2（信号源统一+KDJ/RSI标签修正+评级对齐）",
     version="5.18.1",
     servers=[{"url": "https://stock-analysis-api-n741.onrender.com", "description": "Render部署"}],
 )
@@ -999,8 +999,10 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             currency=str(info.get("currency", "USD")),
             current_price=current_price,
             change_percent=change_percent,
-            signal=str(signal_data["signal"]),
-            confidence=str(signal_data["confidence"]),
+            # V5.18.2: 改用 detect_trade_points 的 trade_point 作为统一信号源，
+            # 避免 get_trading_signal 说"看多"但买卖点给出做空价格的两张皮问题
+            signal=str(trade_points["trade_point"]),
+            confidence=("强" if abs(trade_points["score"]) >= 6 else ("中等" if abs(trade_points["score"]) >= 3 else "弱")),
             trade_point=str(trade_points["trade_point"]),
             trade_point_cn=trade_point_cn.get(trade_points["trade_point"], "观望"),
             trade_score=trade_points["score"],
@@ -2573,15 +2575,16 @@ def build_formatted_report(
         "strong_sell": "强烈看空",
     }
     signal_cn = signal_cn_map.get(signal.lower(), "观望")
-    # 星级
-    score = trade_score
-    if score >= 7:
-        stars = "★★★"
-    elif score >= 3:
-        stars = "★★☆"
-    else:
-        stars = "★☆☆"
-    conf_cn = {"high": "强", "medium": "中等", "low": "弱"}.get(confidence, "中等")
+    # 星级（V5.18.2: 基于 trade_point 而非 trade_score，与底部评分各司其职）
+    stars_map = {
+        "strong_buy": "★★★",
+        "strong_sell": "★★★",
+        "buy": "★★☆",
+        "sell": "★★☆",
+        "hold": "— — —"
+    }
+    stars = stars_map.get(trade_point.lower(), "— — —")
+    conf_cn = {"high": "强", "medium": "中等", "low": "弱"}.get(confidence, confidence)  # V5.18.2: 兼容调用方传中文标签
     # V5.17.6: ADX<25 震荡市过滤 — 趋势不明朗时压制信号
     adx_filtered = adx < 25 and signal_cn != "观望"
     if adx_filtered:
@@ -2903,9 +2906,15 @@ def build_formatted_report(
     if macd_score <= -5:
         neg_factors.append(f"MACD空头运行（{macd_score}分），短期承压")
     if kdj_score <= -5:
-        neg_factors.append(f"KDJ死叉（{kdj_score}分），动能转弱")
+        if kdj_k > kdj_d:  # V5.18.2: K在D之上=金叉≠死叉，修正标签
+            neg_factors.append(f"KDJ超买区（{kdj_score}分），金叉但指标高企有回调风险")
+        else:
+            neg_factors.append(f"KDJ死叉（{kdj_score}分），动能转弱")
     if rsi_score < 0:
-        neg_factors.append(f"RSI走弱（{rsi_score}分），上行动能不足")
+        if rsi > rsi_prev:  # V5.18.2: RSI仍在上升，"走弱"不准确
+            neg_factors.append(f"RSI高企（{rsi_score}分），超买区域需谨慎")
+        else:
+            neg_factors.append(f"RSI走弱（{rsi_score}分），上行动能不足")
     if adx_score < 0:
         neg_factors.append(f"ADX空头趋势（{adx_score}分）")
     if ma_score < 0:
