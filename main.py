@@ -2610,7 +2610,15 @@ def build_formatted_report(
     lines.append(f"  • ADX：{adx}（{adx_desc}），+DI={plus_di} / -DI={minus_di}")
     vol_cn = {"high_volume": "放量", "above_avg": "量能偏高", "low_volume": "缩量", "normal": "正常"}.get(volume_signal, "正常")
     lines.append(f"  • 成交量：{vol_cn}（比率{volume_ratio}x）")
-    trend_cn = {"bullish": "看涨", "bearish": "看跌", "ranging": "震荡"}.get(trend_direction, "震荡")
+    trend_cn = {"bullish": "偏多", "bearish": "偏空", "neutral": "震荡"}.get(trend_direction, "震荡")
+    # 与 signal 对齐：观望信号时趋势描述需保守
+    if signal in ("hold",):
+        if trend_direction == "bullish":
+            trend_cn = "偏多（但信号观望，需确认）"
+        elif trend_direction == "bearish":
+            trend_cn = "偏空（但信号观望，需确认）"
+        else:
+            trend_cn = "震荡（无明显方向）"
     lines.append(f"  • 趋势方向：{trend_cn}")
     # V5.16: ATR波动率
     if atr:
@@ -2643,8 +2651,8 @@ def build_formatted_report(
         lines.append(f"  - 激进策略：现价直接清仓，等待下次买入信号")
     else:
         lines.append(f"  - 保守策略：观望为主，等待明确信号")
-        lines.append(f"  - 稳健策略：可小仓位试探，止损设 {currency_symbol}{support_level if support_level else '—'}")
-        lines.append(f"  - 激进策略：短线操作者可在支撑位 {currency_symbol}{support_level if support_level else '—'} 附近抢反弹")
+        lines.append(f"  - 稳健策略：暂不操作，等待指标进一步确认")
+        lines.append(f"  - 激进策略：若突破 {currency_symbol}{resistance_level if resistance_level else '—'} 可少量试探")
     lines.append("")
     lines.append("=" * 40)
     lines.append("以上分析基于技术指标客观数据，仅供个人投资参考。股市有风险，投资需谨慎。")
@@ -2746,7 +2754,15 @@ def build_tradepoint_report(
 
     vol_cn = {"high_volume": "放量", "above_avg": "量能偏高", "low_volume": "缩量", "normal": "正常"}.get(volume_ratio, f"{volume_ratio}x")
     lines.append(f"  • 成交量比率：{vol_cn}")
-    trend_cn = {"bullish": "看涨", "bearish": "看跌", "ranging": "震荡"}.get(trend_direction, "震荡")
+    trend_cn = {"bullish": "偏多", "bearish": "偏空", "neutral": "震荡"}.get(trend_direction, "震荡")
+    # 与 signal 对齐：观望信号时趋势描述需保守
+    if signal in ("hold",):
+        if trend_direction == "bullish":
+            trend_cn = "偏多（但信号观望，需确认）"
+        elif trend_direction == "bearish":
+            trend_cn = "偏空（但信号观望，需确认）"
+        else:
+            trend_cn = "震荡（无明显方向）"
     lines.append(f"  • 趋势方向：{trend_cn}")
 
     if support_level and support_level != 0 and current_price != 0:
