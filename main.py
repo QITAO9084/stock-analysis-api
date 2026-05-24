@@ -12,8 +12,9 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.11（API层预渲染报告：新增 formatted_report 字段，Agent 只做管道转发）",
-    version="5.11.0"
+    description="股票/加密货币分析API - V5.12（全端预渲染：7个端点全部输出 formatted_report，Agent 只做管道转发）",
+    version="5.12.0",
+    servers=[{"url": "https://stock-analysis-api-n741.onrender.com", "description": "Render部署"}],
 )
 
 # 允许跨域
