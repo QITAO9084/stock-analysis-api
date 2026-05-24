@@ -1657,9 +1657,13 @@ def detect_trade_points(data, symbol):
     if j < 0 and kdj_golden:
         buy_reasons.append(f"KDJ超卖区金叉（K={k}，D={d}，J={round(j,1)}）")
         buy_count += 1
+    elif j < 0 and k < d:
+        # 超卖区死叉：J<0 但 K<D，跌势未尽，只标注超卖不猜反弹
+        buy_reasons.append(f"KDJ超卖区死叉（K={k}，D={d}，J={round(j,1)}），跌势未尽")
+        buy_count += 0
     elif j < 0:
-        buy_reasons.append(f"KDJ的J值深度超卖（{round(j,1)}），反弹在即")
-        buy_count += 0.5
+        # K>D 但非金叉（J<0 复兴），超卖钝化，可能反弹但不确定
+        buy_reasons.append(f"KDJ的J值深度超卖（{round(j,1)}），超卖区钝化")
 
     # 4. 放量上涨
     if vol_status in ("high_volume", "above_avg") and is_green:
@@ -2894,7 +2898,12 @@ def build_formatted_report(
             if adx_filtered and "ADX" in r:
                 continue  # ADX<25 趋势不明，不展示"ADX偏多"等
             visible_buy.append(r)
-            star = "★★★" if ("强烈" in r or "金叉" in r) else "★★☆"
+            # V5.18.4: KDJ死叉 + 超卖理由 → 降级为 ★☆☆（死叉时超卖不等于买入信号）
+            _is_oversold_death = ("超卖" in r or "J值" in r) and kdj_cross == "死叉"
+            if _is_oversold_death:
+                star = "★☆☆"
+            else:
+                star = "★★★" if ("强烈" in r or "金叉" in r) else "★★☆"
             lines.append(f"  ✅ {r} {star}")
         # ADX 过滤后所有买入理由被压制 → 给上下文解释，避免沉默误导
         if not visible_buy and adx_filtered:
