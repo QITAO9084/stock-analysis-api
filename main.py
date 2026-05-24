@@ -3015,27 +3015,28 @@ def build_formatted_report(
     lines.append("")
     # 操作建议
     lines.append("操作建议")
-    # V5.18.1: RSI 超买(>80)或超卖(<20)时，操作建议提示风险
-    rsi_risk = rsi and (rsi > 80 or rsi < 20)
-    rsi_risk_note = "⚠️ RSI极度超买，回调风险高，建议等待回调" if rsi and rsi > 80 else ("⚠️ RSI极度超卖，反弹风险高，建议等待确认" if rsi and rsi < 20 else "")
-
-    if signal in ("strong_buy", "buy"):
-        lines.append(f"  - 保守策略：等待回调至支撑位 {currency_symbol}{support_level if support_level else '—'} 附近再入场")
-        lines.append(f"  - 稳健策略：按入场价 {entry_str} 分批建仓，止损设 {stop_str}")
-        lines.append(f"  - 激进策略：现价 {currency_symbol}{current_price} 直接入场，目标 {take_str}")
-        if rsi_risk_note:
-            lines.append(f"  {rsi_risk_note}")
-    elif signal in ("strong_sell", "sell"):
-        lines.append(f"  - 保守策略：继续持有观察，等待反弹至阻力位 {currency_symbol}{resistance_level if resistance_level else '—'} 再减仓")
-        lines.append(f"  - 稳健策略：按当前价 {currency_symbol}{current_price} 分批减仓，止损设 {stop_str}")
-        lines.append(f"  - 激进策略：现价直接清仓，等待下次买入信号")
-        if rsi_risk_note:
-            lines.append(f"  {rsi_risk_note}")
+    # V5.18.2: ADX<25 震荡市 → 强制降级为观望建议（不受 trade_point 方向影响）
+    if adx_filtered:
+        lines.append(f"  - 保守策略：观望为主，等待 ADX>25（趋势明确）后再参考技术信号")
+        lines.append(f"  - 稳健策略：暂不操作，关注 ADX 回升至 25 以上再考虑入场")
+        lines.append(f"  - 激进策略：震荡市不建议操作，等 ADX>25 确认趋势后再行动")
     else:
-        if adx_filtered:
-            lines.append(f"  - 保守策略：观望为主，等待 ADX>25（趋势明确）后再参考技术信号")
-            lines.append(f"  - 稳健策略：暂不操作，关注 ADX 回升至 25 以上再考虑入场")
-            lines.append(f"  - 激进策略：震荡市不建议操作，等 ADX>25 确认趋势后再行动")
+        # V5.18.1: RSI 超买(>80)或超卖(<20)时，操作建议提示风险
+        rsi_risk = rsi and (rsi > 80 or rsi < 20)
+        rsi_risk_note = "⚠️ RSI极度超买，回调风险高，建议等待回调" if rsi and rsi > 80 else ("⚠️ RSI极度超卖，反弹风险高，建议等待确认" if rsi and rsi < 20 else "")
+
+        if signal in ("strong_buy", "buy"):
+            lines.append(f"  - 保守策略：等待回调至支撑位 {currency_symbol}{support_level if support_level else '—'} 附近再入场")
+            lines.append(f"  - 稳健策略：按入场价 {entry_str} 分批建仓，止损设 {stop_str}")
+            lines.append(f"  - 激进策略：现价 {currency_symbol}{current_price} 直接入场，目标 {take_str}")
+            if rsi_risk_note:
+                lines.append(f"  {rsi_risk_note}")
+        elif signal in ("strong_sell", "sell"):
+            lines.append(f"  - 保守策略：继续持有观察，等待反弹至阻力位 {currency_symbol}{resistance_level if resistance_level else '—'} 再减仓")
+            lines.append(f"  - 稳健策略：按当前价 {currency_symbol}{current_price} 分批减仓，止损设 {stop_str}")
+            lines.append(f"  - 激进策略：现价直接清仓，等待下次买入信号")
+            if rsi_risk_note:
+                lines.append(f"  {rsi_risk_note}")
         else:
             lines.append(f"  - 保守策略：观望为主，等待明确信号")
             lines.append(f"  - 稳健策略：暂不操作，等待指标进一步确认")
