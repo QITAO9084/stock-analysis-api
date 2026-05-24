@@ -19,8 +19,8 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.17（10维回测对齐+ATR止损+R:R+负面因素）",
-    version="5.17.0",
+    description="股票/加密货币分析API - V5.17.7（10维回测对齐+ATR止损+R:R+负面因素+股息率容错）",
+    version="5.17.7",
     servers=[{"url": "https://stock-analysis-api-n741.onrender.com", "description": "Render部署"}],
 )
 
@@ -924,7 +924,14 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             fundamentals["52w_high"] = info.get("fiftyTwoWeekHigh")
             fundamentals["52w_low"] = info.get("fiftyTwoWeekLow")
             div_yield = info.get("dividendYield")
-            fundamentals["dividend_yield"] = round(div_yield * 100, 2) if div_yield else None
+            # yfinance 有时返回小数(0.0035=0.35%)，有时返回百分比(0.35=0.35%)
+            # 阈值>1判定为已是百分比格式，无需再*100
+            if div_yield and div_yield > 1:
+                fundamentals["dividend_yield"] = round(div_yield, 2)
+            elif div_yield:
+                fundamentals["dividend_yield"] = round(div_yield * 100, 2)
+            else:
+                fundamentals["dividend_yield"] = None
         except Exception:
             pass
 
