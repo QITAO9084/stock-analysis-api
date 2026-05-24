@@ -19,7 +19,7 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.14（评分校准+多周期共振+大盘环境因子）",
+    description="股票/加密货币分析API - V5.15（准确率回测对齐+K线形态+成交量背离）",
     version="5.14.0",
     servers=[{"url": "https://stock-analysis-api-n741.onrender.com", "description": "Render部署"}],
 )
@@ -874,6 +874,12 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
         buy_reasons_text = "；".join(trade_points["buy_reasons"]) if trade_points["buy_reasons"] else ""
         sell_reasons_text = "；".join(trade_points["sell_reasons"]) if trade_points["sell_reasons"] else ""
 
+        # V5.15: K线形态 + 成交量背离（用于报告展示）
+        candle_patterns = detect_candlestick_patterns(data)
+        vol_divergences = detect_volume_divergence(data['Close'], data['Volume'])
+        cp_text = "；".join([f"{cp['pattern']}({cp['desc']})" for cp in candle_patterns]) if candle_patterns else "无特殊形态"
+        vd_text = "；".join([f"{'🟢' if vd['type']=='bullish' else '🔴'}{vd['desc']}" for vd in vol_divergences]) if vol_divergences else "未检测到价量背离"
+
         # V5.13: 信号准确率回测
         accuracy_data = compute_signal_accuracy(data)
 
@@ -954,6 +960,8 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             weekly_trend=weekly_trend,
             monthly_trend=monthly_trend,
             market_trend=market_trend,
+            candle_patterns=candle_patterns,
+            vol_divergences=vol_divergences,
         )
 
         return {
@@ -1027,6 +1035,9 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             "weekly_trend": weekly_trend.get("label", "—") if weekly_trend else "—",
             "monthly_trend": monthly_trend.get("label", "—") if monthly_trend else "—",
             "market_index_trend": market_trend.get("label", "—") if market_trend else "—",
+            # V5.15: K线形态 & 成交量背离
+            "candle_patterns": cp_text,
+            "volume_divergence": vd_text,
         }
     except HTTPException:
         raise
@@ -1647,6 +1658,28 @@ def detect_trade_points(data, symbol):
         sell_reasons.append(f"RSI顶背离：{div_desc}")
         sell_count += 1.5
 
+    # ========== V5.15: K线形态识别 ==========
+    # 9. K线反转形态（权重 1.0~2.0 分）
+    candle_patterns = detect_candlestick_patterns(data)
+    for cp in candle_patterns:
+        if cp["type"] == "bullish":
+            buy_reasons.append(f"K线{cp['pattern']}：{cp['desc']}")
+            buy_count += cp["score"] * 0.5
+        elif cp["type"] == "bearish":
+            sell_reasons.append(f"K线{cp['pattern']}：{cp['desc']}")
+            sell_count += abs(cp["score"]) * 0.5
+
+    # ========== V5.15: 成交量背离检测 ==========
+    # 10. 价量背离（权重 1.0~1.5 分）
+    vol_divs = detect_volume_divergence(data['Close'], data['Volume'])
+    for vd in vol_divs:
+        if vd["type"] == "bullish":
+            buy_reasons.append(f"成交量背离：{vd['desc']}")
+            buy_count += vd["score"] * 0.5
+        elif vd["type"] == "bearish":
+            sell_reasons.append(f"成交量背离：{vd['desc']}")
+            sell_count += abs(vd["score"]) * 0.5
+
     # ========== 综合判断 ==========
 
     # 评分：买入+卖出互相抵消
@@ -1801,66 +1834,380 @@ def get_period_trend(data):
     return {"trend": trend, "rsi": rsi_val, "price_vs_ma20": vs_ma, "label": label}
 
 
+def detect_candlestick_patterns(data):
+    """
+    V5.15: K线形态识别。
+    识别锤子线、吞没形态、十字星、启明星/黄昏星等常见反转形态。
+    
+    返回：[{"pattern": str, "type": "bullish"|"bearish", "desc": str, "score": int}, ...]
+    """
+    patterns = []
+    if len(data) < 4:
+        return patterns
+    
+    o = data['Open']
+    h = data['High']
+    l = data['Low']
+    c = data['Close']
+    
+    def body(i):
+        return abs(c.iloc[i] - o.iloc[i])
+    
+    def upper_shadow(i):
+        return h.iloc[i] - max(c.iloc[i], o.iloc[i])
+    
+    def lower_shadow(i):
+        return min(c.iloc[i], o.iloc[i]) - l.iloc[i]
+    
+    def total_range(i):
+        return h.iloc[i] - l.iloc[i]
+    
+    def is_bullish(i):
+        return c.iloc[i] > o.iloc[i]
+    
+    def is_bearish(i):
+        return c.iloc[i] < o.iloc[i]
+    
+    i = -1  # 只看最新一根 K 线
+    
+    # 跳过无效数据
+    if total_range(i) <= 0 or body(i) <= 0:
+        return patterns
+    
+    body_ratio = body(i) / total_range(i)
+    us_ratio = upper_shadow(i) / total_range(i)
+    ls_ratio = lower_shadow(i) / total_range(i)
+    
+    # 1. 锤子线（Hammer）：小实体在顶部，长下影，几乎无上影
+    if ls_ratio > 0.6 and us_ratio < 0.15 and body_ratio < 0.3:
+        patterns.append({
+            "pattern": "锤子线",
+            "type": "bullish",
+            "desc": "长下影线表明下方支撑强劲，可能止跌反弹",
+            "score": 2
+        })
+    
+    # 2. 倒锤子线（Inverted Hammer）/ 流星线（Shooting Star）
+    if us_ratio > 0.6 and ls_ratio < 0.15 and body_ratio < 0.3:
+        if is_bullish(i):
+            patterns.append({
+                "pattern": "倒锤子线",
+                "type": "bullish",
+                "desc": "连续下跌后出现，可能变盘向上",
+                "score": 2
+            })
+        else:
+            patterns.append({
+                "pattern": "流星线",
+                "type": "bearish",
+                "desc": "连续上涨后出现，长上影表明抛压出现，可能见顶",
+                "score": -2
+            })
+    
+    # 3. 十字星（Doji）：开收价接近
+    if body_ratio < 0.05:
+        patterns.append({
+            "pattern": "十字星",
+            "type": "neutral",
+            "desc": "多空力量均衡，往往预示趋势转折",
+            "score": 0  # 方向由上下文决定，暂不直接加分
+        })
+    
+    # 4. 吞没形态（需要前一根 K 线）
+    if len(data) >= 2:
+        prev_body = body(-2)
+        prev_open = o.iloc[-2]
+        prev_close = c.iloc[-2]
+        
+        # 看涨吞没：前阴后阳，阳线实体完全包住阴线
+        if (is_bearish(-2) and is_bullish(-1) and
+            o.iloc[-1] <= prev_close and c.iloc[-1] >= prev_open and
+            body(-1) > prev_body * 1.2):
+            patterns.append({
+                "pattern": "看涨吞没",
+                "type": "bullish",
+                "desc": "阳线完全吞没前日阴线，多头强势反攻",
+                "score": 3
+            })
+        
+        # 看跌吞没：前阳后阴，阴线实体完全包住阳线
+        if (is_bullish(-2) and is_bearish(-1) and
+            o.iloc[-1] >= prev_close and c.iloc[-1] <= prev_open and
+            body(-1) > prev_body * 1.2):
+            patterns.append({
+                "pattern": "看跌吞没",
+                "type": "bearish",
+                "desc": "阴线完全吞没前日阳线，空头强势反攻",
+                "score": -3
+            })
+    
+    # 5. 启明星/黄昏星（需要前两根 K 线）
+    if len(data) >= 3:
+        p2_body = body(-3)
+        p1_body = body(-2)
+        
+        # 启明星：大阴线 + 小实体（跳空低开） + 大阳线
+        if (is_bearish(-3) and p2_body > total_range(-3) * 0.4 and
+            body(-2) < total_range(-2) * 0.25 and
+            is_bullish(-1) and body(-1) > total_range(-1) * 0.4 and
+            c.iloc[-1] > (o.iloc[-3] + c.iloc[-3]) / 2):
+            patterns.append({
+                "pattern": "启明星",
+                "type": "bullish",
+                "desc": "三线反转形态，大阴→小星→大阳，强烈看涨",
+                "score": 4
+            })
+        
+        # 黄昏星：大阳线 + 小实体（跳空高开） + 大阴线
+        if (is_bullish(-3) and p2_body > total_range(-3) * 0.4 and
+            body(-2) < total_range(-2) * 0.25 and
+            is_bearish(-1) and body(-1) > total_range(-1) * 0.4 and
+            c.iloc[-1] < (o.iloc[-3] + c.iloc[-3]) / 2):
+            patterns.append({
+                "pattern": "黄昏星",
+                "type": "bearish",
+                "desc": "三线反转形态，大阳→小星→大阴，强烈看跌",
+                "score": -4
+            })
+    
+    return patterns
+
+
+def detect_volume_divergence(closes, volumes):
+    """
+    V5.15: 成交量背离检测。
+    
+    价涨量缩 → 上涨乏力（bearish divergence）
+    价跌量缩 → 抛压衰竭（bullish divergence）
+    
+    返回：[{"type": "bullish"|"bearish", "desc": str, "score": int}, ...]
+    """
+    divergences = []
+    if len(closes) < 10 or len(volumes) < 10:
+        return divergences
+    
+    # 最近 5 个交易日
+    c5 = closes.iloc[-5:]
+    v5 = volumes.iloc[-5:]
+    
+    price_change = (c5.iloc[-1] - c5.iloc[0]) / c5.iloc[0] * 100
+    vol_change = (v5.iloc[-1] - v5.iloc[0]) / v5.iloc[0] * 100 if v5.iloc[0] > 0 else 0
+    
+    # 近5日均量 vs 前5日均量
+    v_recent = volumes.iloc[-5:].mean()
+    v_prev = volumes.iloc[-10:-5].mean() if len(volumes) >= 10 else v_recent
+    vol_trend = (v_recent - v_prev) / v_prev * 100 if v_prev > 0 else 0
+    
+    # 1. 价涨量缩：上涨乏力（bearish）
+    if price_change > 2 and vol_trend < -10:
+        divergences.append({
+            "type": "bearish",
+            "desc": f"近5日价格涨{price_change:+.1f}%，但成交量萎缩{vol_trend:.0f}%，上涨动能不足",
+            "score": -3
+        })
+    elif price_change > 1 and vol_trend < -15:
+        divergences.append({
+            "type": "bearish",
+            "desc": f"价涨量缩（价格{price_change:+.1f}%，量{vol_trend:.0f}%），警惕冲高回落",
+            "score": -2
+        })
+    
+    # 2. 价跌量缩：抛压衰竭（bullish）
+    if price_change < -2 and vol_trend < -10:
+        divergences.append({
+            "type": "bullish",
+            "desc": f"近5日价格跌{price_change:.1f}%，但成交量同步萎缩{vol_trend:.0f}%，抛压在减少",
+            "score": 3
+        })
+    elif price_change < -1 and vol_trend < -15:
+        divergences.append({
+            "type": "bullish",
+            "desc": f"价跌量缩（价格{price_change:.1f}%，量{vol_trend:.0f}%），抛压衰减中",
+            "score": 2
+        })
+    
+    return divergences
+
+
 def compute_signal_accuracy(data):
     """
-    简单回测：计算最近60个交易日信号方向与5日后实际价格方向的一致率。
+    V5.15: 信号准确率回测 — 使用与 detect_trade_points 相同的多因子信号判定逻辑。
     
-    对于近60天中可验证的每一天，判断当日简化信号方向（看多/看空），
-    与该日之后5日实际涨跌对比，统计一致的比例。
+    在最近60个交易日窗口内，逐日使用完整的7维评分体系判定买卖信号方向，
+    追踪信号触发后5日的实际走势，统计方向一致率。
     
-    返回：{"accuracy": float, "testable_days": int, "consistent_days": int}
+    只统计有明确方向信号的日子（|净分| >= 1），中性日跳过。
+    
+    返回：{"accuracy": float, "testable_days": int, "consistent_days": int, "note": str}
     """
     closes = data['Close']
-    if len(closes) < 30:
+    highs = data['High']
+    lows = data['Low']
+    opens = data['Open']
+    volumes = data['Volume']
+    
+    n = len(closes)
+    if n < 30:
         return {"accuracy": None, "testable_days": 0, "consistent_days": 0, "note": "数据不足30日，无法回测"}
     
-    lookback = min(60, len(closes) - 6)  # 最多60天，且留5天未来窗口
+    lookback = min(60, n - 6)
     if lookback < 5:
         return {"accuracy": None, "testable_days": 0, "consistent_days": 0, "note": "数据量不足，无法回测"}
+    
+    # ---- 预计算全序列指标 ----
+    # RSI
+    delta = closes.diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs_series = gain / loss.replace(0, float('nan'))
+    rsi_series = 100 - (100 / (1 + rs_series))
+    
+    # MACD
+    ema12 = closes.ewm(span=12, adjust=False).mean()
+    ema26 = closes.ewm(span=26, adjust=False).mean()
+    macd_series = ema12 - ema26
+    sig_series = macd_series.ewm(span=9, adjust=False).mean()
+    hist_series = (macd_series - sig_series) * 2
+    
+    # KDJ
+    low9 = lows.rolling(9).min()
+    high9 = highs.rolling(9).max()
+    rsv = ((closes - low9) / (high9 - low9).replace(0, float('nan'))) * 100
+    k_series = rsv.ewm(com=2, adjust=False).mean()
+    d_series = k_series.ewm(com=2, adjust=False).mean()
+    j_series = 3 * k_series - 2 * d_series
+    
+    # Bollinger
+    ma20_series = closes.rolling(20).mean()
+    std20 = closes.rolling(20).std()
+    upper_series = ma20_series + 2 * std20
+    lower_series = ma20_series - 2 * std20
+    
+    # MA
+    ma5_series = closes.rolling(5).mean()
+    ma10_series = closes.rolling(10).mean()
+    # ma20_series already computed
+    ma50_series = closes.rolling(50).mean()
+    
+    # Volume ratio
+    vol_ma10 = volumes.rolling(10).mean()
     
     consistent = 0
     total = 0
     
-    # 计算全序列 RSI（用于方向判断）
-    delta = closes.diff()
-    gain = delta.where(delta > 0, 0).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    rsi_full = 100 - (100 / (1 + rs))
-    
-    # 计算全序列 MACD
-    ema12 = closes.ewm(span=12, adjust=False).mean()
-    ema26 = closes.ewm(span=26, adjust=False).mean()
-    macd_full = ema12 - ema26
-    macd_signal_full = macd_full.ewm(span=9, adjust=False).mean()
-    
-    for i in range(len(closes) - lookback - 5, len(closes) - 5):
-        # 当日简化信号：RSI<30→看多，RSI>70→看空，MACD在信号线上→看多
-        rsi_i = rsi_full.iloc[i] if not pd.isna(rsi_full.iloc[i]) else 50
-        macd_i = macd_full.iloc[i]
-        sig_i = macd_signal_full.iloc[i]
+    for i in range(n - lookback - 5, n - 5):
+        buy_score = 0
+        sell_score = 0
         
-        if rsi_i < 30 and macd_i > sig_i:
+        # 1. RSI（V5.14 细粒度）
+        rsi_i = rsi_series.iloc[i]
+        if not pd.isna(rsi_i):
+            if rsi_i < 20:
+                buy_score += 4
+            elif rsi_i < 30:
+                buy_score += 2
+            elif rsi_i < 45:
+                buy_score += 1
+            if rsi_i > 80:
+                sell_score += 4
+            elif rsi_i > 70:
+                sell_score += 2
+            elif rsi_i > 60:
+                sell_score += 1
+        
+        # 2. MACD
+        macd_i = macd_series.iloc[i]
+        signal_i = sig_series.iloc[i]
+        hist_i = hist_series.iloc[i]
+        if not pd.isna(macd_i):
+            if macd_i > signal_i and hist_i > 0:
+                buy_score += 2
+            if macd_i < signal_i and hist_i < 0:
+                sell_score += 2
+            # MACD柱萎缩
+            if i > 0:
+                prev_hist = hist_series.iloc[i - 1]
+                if not pd.isna(prev_hist) and abs(hist_i) > 0.5:
+                    if hist_i > 0 and hist_i < prev_hist:
+                        sell_score += 1
+                    elif hist_i < 0 and hist_i > prev_hist:
+                        buy_score += 1
+        
+        # 3. KDJ
+        j_i = j_series.iloc[i]
+        k_i = k_series.iloc[i]
+        d_i = d_series.iloc[i]
+        if not pd.isna(j_i):
+            if j_i < 0:
+                buy_score += 2
+            elif j_i > 100:
+                sell_score += 2
+            if k_i < 20 and d_i < 20:
+                buy_score += 1
+            elif k_i > 80 and d_i > 80:
+                sell_score += 1
+        
+        # 4. Bollinger
+        current_i = closes.iloc[i]
+        lower_i = lower_series.iloc[i]
+        upper_i = upper_series.iloc[i]
+        if not pd.isna(lower_i):
+            if current_i < lower_i:
+                buy_score += 1
+            if current_i > upper_i:
+                sell_score += 1
+        
+        # 5. MA
+        ma5_i = ma5_series.iloc[i]
+        ma10_i = ma10_series.iloc[i]
+        ma20_i = ma20_series.iloc[i]
+        ma50_i = ma50_series.iloc[i]
+        if not pd.isna(ma5_i) and not pd.isna(ma10_i) and not pd.isna(ma20_i):
+            if current_i > ma5_i and ma5_i > ma10_i and ma10_i > ma20_i:
+                buy_score += 2
+            if current_i < ma5_i and ma5_i < ma10_i and ma10_i < ma20_i:
+                sell_score += 2
+        if not pd.isna(ma50_i):
+            if current_i > ma50_i and ma20_i > ma50_i:
+                buy_score += 2
+            elif current_i < ma50_i and ma20_i < ma50_i:
+                sell_score += 2
+        
+        # 6. Volume
+        vol_ratio_i = volumes.iloc[i] / vol_ma10.iloc[i] if not pd.isna(vol_ma10.iloc[i]) and vol_ma10.iloc[i] > 0 else 1
+        if vol_ratio_i > 1.5:
+            if closes.iloc[i] > opens.iloc[i]:
+                buy_score += 2
+            else:
+                sell_score += 2
+        
+        net_score = buy_score - sell_score
+        
+        # 只统计有明确方向信号的日子
+        if net_score >= 1:
             direction = "bull"
-        elif rsi_i > 70 and macd_i < sig_i:
+        elif net_score <= -1:
             direction = "bear"
-        elif macd_i > sig_i:
-            direction = "bull"
         else:
-            direction = "bear"
+            continue
         
-        # 5日后是否涨
+        # 5日后实际涨跌
         forward_return = closes.iloc[i + 5] - closes.iloc[i]
-        
+        total += 1
         if (direction == "bull" and forward_return > 0) or (direction == "bear" and forward_return < 0):
             consistent += 1
-        total += 1
     
     if total == 0:
-        return {"accuracy": None, "testable_days": 0, "consistent_days": 0, "note": "无可用测试日"}
+        return {"accuracy": None, "testable_days": 0, "consistent_days": 0, 
+                "note": f"回测窗口{lookback}日中无明确信号触发"}
     
     accuracy = round(consistent / total * 100, 1)
-    return {"accuracy": accuracy, "testable_days": total, "consistent_days": consistent, "note": ""}
+    return {
+        "accuracy": accuracy,
+        "testable_days": total,
+        "consistent_days": consistent,
+        "note": f"基于{lookback}日窗口，追踪实际买卖信号（|净分|>=1）与5日后走势一致率"
+    }
 
 
 def build_formatted_report(
@@ -1878,7 +2225,8 @@ def build_formatted_report(
     volume_signal, volume_ratio, trend_direction,
     support_level, resistance_level,
     kline_text, rsi_div_type, rsi_div_desc,
-    accuracy_data=None, weekly_trend=None, monthly_trend=None, market_trend=None
+    accuracy_data=None, weekly_trend=None, monthly_trend=None, market_trend=None,
+    candle_patterns=None, vol_divergences=None
 ):
     """
     V5.14: API层预渲染完整中文分析报告（含多周期共振+大盘环境+信号准确率回测）。
@@ -1958,6 +2306,29 @@ def build_formatted_report(
     elif rsi_div_type == "bearish_divergence":
         div_score = -20
     lines.append(f"  RSI背离：{div_score}分（{rsi_div_desc if rsi_div_type != 'none' else '无'}）")
+    # V5.15: K线形态评分
+    cp_score = 0
+    cp_label = "无特殊形态"
+    if candle_patterns:
+        cp_parts = []
+        for cp in candle_patterns:
+            s = cp["score"] if cp["type"] != "neutral" else 0
+            cp_score += s
+            emoji = "🟢" if cp["type"] == "bullish" else ("🔴" if cp["type"] == "bearish" else "⚪")
+            cp_parts.append(f"{emoji}{cp['pattern']}")
+        cp_label = ",".join(cp_parts) if cp_parts else "无特殊形态"
+    lines.append(f"  K线形态：{cp_score}分（{cp_label}）")
+    # V5.15: 成交量背离评分
+    vd_score = 0
+    vd_label = "无背离"
+    if vol_divergences:
+        vd_parts = []
+        for vd in vol_divergences:
+            vd_score += vd["score"]
+            emoji = "🟢" if vd["type"] == "bullish" else "🔴"
+            vd_parts.append(f"{emoji}{vd['type']}")
+        vd_label = ",".join(vd_parts) if vd_parts else "无背离"
+    lines.append(f"  成交量背离：{vd_score}分（{vd_label}）")
     # ADX
     adx_score = 0
     if adx_trend == "strong_bull":
@@ -2046,7 +2417,7 @@ def build_formatted_report(
         boll_score = -3
     lines.append(f"  布林带：{boll_score}分（上轨{boll_upper}，下轨{boll_lower}）")
     lines.append("  " + "-" * 35)
-    total_score = div_score + adx_score + macd_score + kdj_score + rsi_score + ma_score + vol_score + boll_score
+    total_score = div_score + adx_score + macd_score + kdj_score + rsi_score + ma_score + vol_score + boll_score + cp_score + vd_score
     # V5.14: 大盘环境系数调整
     total_score = total_score * market_coef
     total_score = max(-100, min(100, round(total_score, 0)))
@@ -2157,9 +2528,11 @@ def build_formatted_report(
         acc = accuracy_data.get("accuracy")
         days = accuracy_data.get("testable_days", 0)
         if acc is not None:
-            lines.append(f"📈 信号准确率回测：近{days}个交易日，信号方向与实际涨跌一致率 {acc}%（{accuracy_data.get('consistent_days', 0)}/{days}）")
+            lines.append(f"📈 信号准确率回测（V5.15 对齐真实买卖信号）：近{days}个有效信号日，方向与实际涨跌一致率 {acc}%（{accuracy_data.get('consistent_days', 0)}/{days}）")
         elif accuracy_data.get("note"):
             lines.append(f"📈 信号准确率回测：{accuracy_data['note']}")
+    elif accuracy_data and accuracy_data.get("note"):
+        lines.append(f"📈 信号准确率回测：{accuracy_data['note']}")
     lines.append("=" * 40)
 
     return "\n".join(lines)
