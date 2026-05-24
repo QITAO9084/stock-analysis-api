@@ -910,7 +910,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             pass
 
         # V5.11: API层预渲染报告，Agent只做管道转发
-        formatted_report = build_formatted_report(
+        formatted_report, score_data = build_formatted_report(
             name=str(info.get("longName", symbol)),
             symbol=symbol,
             market=str(market),
@@ -976,6 +976,9 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             "analysis_time": now_cn(),
             # V5.13: 预渲染报告（Agent直接输出，无需加工）
             "formatted_report": formatted_report,
+            # V5.17.5: 10维评分明细（程序化消费）
+            "total_score": score_data["total_score"],
+            "score_detail": score_data["score_breakdown"],
             # V5.13: 信号准确率回测数据
             "signal_accuracy": accuracy_data.get("accuracy"),
             "signal_accuracy_days": accuracy_data.get("testable_days", 0),
@@ -2533,14 +2536,29 @@ def build_formatted_report(
     # V5.17.1: 多周期一致性折扣
     total_score = total_score + mt_discount
     total_score = max(-100, min(100, round(total_score, 0)))
-    final_signal = signal_cn
+    # V5.17.5: 评分行信号从 total_score 推导，与 10 维评分体系自洽
+    if total_score >= 10:
+        score_signal = "看多"
+        score_stars = "★★★" if total_score >= 30 else "★★☆"
+    elif total_score >= 3:
+        score_signal = "偏多"
+        score_stars = "★☆☆"
+    elif total_score <= -10:
+        score_signal = "看空"
+        score_stars = "★★★" if total_score <= -30 else "★★☆"
+    elif total_score <= -3:
+        score_signal = "偏空"
+        score_stars = "★☆☆"
+    else:
+        score_signal = "中性"
+        score_stars = "— — —"
     mt_notes = []
     if market_coef != 1.0:
         mt_notes.append(f"大盘{market_coef:.0%}系数")
     if mt_discount != 0:
         mt_notes.append(f"多周期{"+" if mt_discount > 0 else ""}{mt_discount}分")
     mt_note = f"（含{','.join(mt_notes)}调整）" if mt_notes else ""
-    lines.append(f"  总分：{int(total_score)} → {final_signal} {stars}（{conf_cn}）{mt_note}")
+    lines.append(f"  总分：{int(total_score)} → {score_signal} {score_stars}{mt_note}")
     lines.append("=" * 40)
     lines.append("")
     lines.append("关键信号触发原因")
@@ -2599,12 +2617,15 @@ def build_formatted_report(
         # 判断一致性：三线同向 = 共振
         bullish_count = sum(1 for t in trends if "买" in t or "多" in t)
         bearish_count = sum(1 for t in trends if "卖" in t or "空" in t)
-        if bullish_count == 3:
-            mt_label = "🔥 三线共振看多 — 信号置信度极高"
+        if mt_discount == 10:
+            if bullish_count == 3:
+                mt_label = "🔥 三线共振看多 — 信号置信度极高"
+            else:
+                mt_label = "⚠️ 三线共振看空 — 信号置信度极高"
             mt_bonus = "（+10分已计入总分）"
-        elif bearish_count == 3:
-            mt_label = "⚠️ 三线共振看空 — 信号置信度极高"
-            mt_bonus = "（+10分已计入总分）"
+        elif mt_discount == -5:
+            mt_label = "⚠️ 三线分歧 — 日线信号可能为假突破，建议观望"
+            mt_bonus = "（-5分已计入总分）"
         elif bullish_count == 2:
             mt_label = "✅ 双线看多，日线信号可信度较高"
             mt_bonus = ""
@@ -2613,7 +2634,7 @@ def build_formatted_report(
             mt_bonus = ""
         else:
             mt_label = "⚠️ 三线分歧 — 日线信号可能为假突破，建议观望"
-            mt_bonus = "（-5分已计入总分）"
+            mt_bonus = ""
 
         lines.append(f"  {'':4}日线：{signal_cn}（RSI={rsi}）")
         lines.append(f"  {'':4}周线：{week_label}（RSI={week_rsi}，{weekly_trend.get('price_vs_ma20','—')}）")
@@ -2688,7 +2709,20 @@ def build_formatted_report(
         lines.append(f"📈 信号准确率回测：{accuracy_data['note']}")
     lines.append("=" * 40)
 
-    return "\n".join(lines)
+    # V5.17.5: 返回评分明细供 API 端点使用
+    score_breakdown = {
+        "rsi_divergence": div_score,
+        "candle_pattern": cp_score,
+        "volume_divergence": vd_score,
+        "adx": adx_score,
+        "macd": macd_score,
+        "kdj": kdj_score,
+        "rsi": rsi_score,
+        "ma": ma_score,
+        "volume": vol_score,
+        "bollinger": boll_score,
+    }
+    return "\n".join(lines), {"total_score": int(total_score), "score_breakdown": score_breakdown}
 
 
 def build_tradepoint_report(
