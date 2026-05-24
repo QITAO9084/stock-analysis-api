@@ -624,7 +624,7 @@ def read_root():
     return {
         "status": "ok",
         "message": "Stock Analysis API is running",
-        "version": "1.0.0"
+        "version": "5.12.1"
     }
 
 @app.get("/stock/info")
