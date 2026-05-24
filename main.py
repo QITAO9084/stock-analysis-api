@@ -2873,6 +2873,11 @@ def build_formatted_report(
     if adx_filtered:
         score_line += f"⚠️（ADX={adx}<25，综合信号已过滤为震荡观望）"
     lines.append(score_line)
+    # V5.18.2: 顶部综合信号与底部评分方向不一致时，加注解说明两套系统的差异
+    _top_direction = {"buy": "多", "strong_buy": "多", "sell": "空", "strong_sell": "空", "hold": None}.get(signal.lower())
+    _bottom_direction = "多" if "多" in score_signal else ("空" if "空" in score_signal else None)
+    if _top_direction and _bottom_direction and _top_direction != _bottom_direction:
+        lines.append(f"💡 顶部信号'{signal_cn}'由事件驱动型买卖点检测（RSI极端值/MFI超买/量价背离等），底部'{score_signal}'由14维加权评分（ADX/MACD/MA等趋势力权重更高），两者侧重点不同。建议结合多周期一致性综合判断。")
     lines.append("=" * 40)
     lines.append("")
     lines.append("关键信号触发原因")
