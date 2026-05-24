@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -11,8 +12,8 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.4（P0升级：ADX趋势强度+RSI背离检测+加权评分）",
-    version="5.4.0"
+    description="股票/加密货币分析API - V5.6（优雅降级：404/500 → 200 + signal:error，解决Agent兜底失效）",
+    version="5.6.0"
 )
 
 # 允许跨域
@@ -23,6 +24,42 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ===== V5.6 优雅降级：将 404/500 错误转为正常 200 响应，避免 Agent 进入故障模式 =====
+# 核心思路：Agent 看到 HTTP 错误 → 本能"解释+替代" → 兜底规则失效
+# 解决方案：API 永不返回错误，工具永远"成功"，Agent 只需按数据输出
+
+ERROR_FALLBACK_MESSAGE = "抱歉，数据获取暂时异常，请稍后再试。"
+
+@app.exception_handler(HTTPException)
+async def graceful_error_handler(request: Request, exc: HTTPException):
+    """404/500 错误 → 正常 200 响应（防止 Agent 故障模式）"""
+    if exc.status_code in (404, 500):
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "error",
+                "signal": "error",
+                "message": ERROR_FALLBACK_MESSAGE,
+            }
+        )
+    # 400 等参数错误正常返回
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": str(exc.detail)}
+    )
+
+# 未捕获异常也优雅降级
+@app.exception_handler(Exception)
+async def unhandled_error_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "error",
+            "signal": "error",
+            "message": ERROR_FALLBACK_MESSAGE,
+        }
+    )
 
 # ===== yfinance 缓存 + 重试 + 限速机制 =====
 _yf_cache = {}       # {key: {"data": DataFrame, "info": dict, "ts": float}}
