@@ -26,6 +26,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ===== V5.12.1 Coze URL 修正中间件 =====
+# 根因：Coze 忽略 OpenAPI servers 字段，直接用 spec URL 拼接工具路径
+# 结果：/openapi.json/stock/analyze2 而非 /stock/analyze2 → 404
+# 解决：自动剥离 /openapi.json 前缀
+@app.middleware("http")
+async def coze_url_fix_middleware(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/openapi.json/"):
+        # 重写路径：去掉 /openapi.json 前缀
+        scope = dict(request.scope)
+        scope["path"] = path.replace("/openapi.json", "", 1)
+        request = Request(scope, request.receive)
+    response = await call_next(request)
+    return response
+
 # ===== V5.6 优雅降级：将 404/500 错误转为正常 200 响应，避免 Agent 进入故障模式 =====
 # 核心思路：Agent 看到 HTTP 错误 → 本能"解释+替代" → 兜底规则失效
 # 解决方案：API 永不返回错误，工具永远"成功"，Agent 只需按数据输出
