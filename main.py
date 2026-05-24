@@ -847,6 +847,21 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
         trade_points = detect_trade_points(data, symbol)
         indicators = signal_data["indicators"]
 
+        # V5.17.2: 修复信号与买卖点不一致导致的 entry/stop 为空
+        # 当 get_trading_signal 返回 HOLD 但 detect_trade_points 返回 sell/strong_sell 时，
+        # sell 分支的 entry=0/stop=0 会导致报告显示 "—"，覆盖为 hold 分支计算
+        if (signal_data["signal"] == "HOLD"
+                and trade_points["trade_point"] in ("sell", "strong_sell")
+                and trade_points["entry_price"] == 0):
+            cur_p = round(data['Close'].iloc[-1], 2)
+            atr_val = trade_points.get("atr", 0)
+            ep = round(cur_p * 0.995, 2)
+            sl = round(ep - atr_val * 2, 2) if atr_val else 0
+            tp = round(ep + atr_val * 3, 2) if atr_val else 0
+            trade_points["entry_price"] = ep
+            trade_points["stop_loss"] = sl
+            trade_points["take_profit"] = tp
+
         current_price = round(data['Close'].iloc[-1], 2)
         prev_close = round(data['Close'].iloc[-2], 2) if len(data) > 1 else current_price
         change_percent = round((current_price - prev_close) / prev_close * 100, 2) if prev_close != 0 else 0
@@ -2332,7 +2347,7 @@ def build_formatted_report(
         "sell": "看空",
         "strong_sell": "强烈看空",
     }
-    signal_cn = signal_cn_map.get(signal, "观望")
+    signal_cn = signal_cn_map.get(signal.lower(), "观望")
     # 星级
     score = trade_score
     if score >= 7:
@@ -2774,8 +2789,8 @@ def build_tradepoint_report(
     vol_cn = {"high_volume": "放量", "above_avg": "量能偏高", "low_volume": "缩量", "normal": "正常"}.get(volume_ratio, f"{volume_ratio}x")
     lines.append(f"  • 成交量比率：{vol_cn}")
     trend_cn = {"bullish": "偏多", "bearish": "偏空", "neutral": "震荡"}.get(trend_direction, "震荡")
-    # 与 signal 对齐：观望信号时趋势描述需保守
-    if signal.lower() in ("hold",):
+    # 与 trade_point 对齐：观望时趋势描述需保守
+    if trade_point.lower() in ("hold",):
         if trend_direction == "bullish":
             trend_cn = "偏多（但信号观望，需确认）"
         elif trend_direction == "bearish":
