@@ -19,8 +19,8 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.17.8（ADX过滤联动+趋势方向/信号原因/评分行对齐）",
-    version="5.17.8",
+    description="股票/加密货币分析API - V5.17.9（ADX过滤：买卖点标注+操作建议降权+信号原因平衡）",
+    version="5.17.9",
     servers=[{"url": "https://stock-analysis-api-n741.onrender.com", "description": "Render部署"}],
 )
 
@@ -2387,6 +2387,9 @@ def build_formatted_report(
     stop_str = f"{currency_symbol}{stop_loss}" if stop_loss and stop_loss != 0 else "—"
     take_str = f"{currency_symbol}{take_profit}" if take_profit and take_profit != 0 else "—"
     lines.append(f"🎯 买卖点：入场 {entry_str} / 止损 {stop_str} / 止盈 {take_str}")
+    # V5.17.9: ADX<25 震荡市买卖点仅供参考
+    if adx_filtered:
+        lines.append(f"⚠️ ADX={adx}<25 趋势不明，以上价位仅供参考，不建议作为实际操作依据")
     # V5.16: 风险收益比
     if entry_price and stop_loss and take_profit and entry_price != 0 and stop_loss != 0:
         risk = abs(entry_price - stop_loss)
@@ -2602,17 +2605,25 @@ def build_formatted_report(
     lines.append("=" * 40)
     lines.append("")
     lines.append("关键信号触发原因")
-    # V5.17.8: ADX<25 震荡市过滤时，压制 ADX 相关买入原因（趋势不明确不应说"偏多"）
+    # V5.17.9: ADX<25 时加一句上下文，避免利空因素一边倒看起来"很悲观"
+    if adx_filtered and (buy_reasons_text or sell_reasons_text):
+        lines.append(f"  💡 ADX={adx}<25 震荡市，以下技术信号可信度降低，仅供参考：")
+    # V5.17.9: ADX<25 震荡市过滤时，跟踪存活买入理由 + 展示平衡
     if buy_reasons_text:
+        visible_buy = []
         for r in buy_reasons_text.split("；"):
             r = r.strip()
             if not r:
                 continue
             if adx_filtered and "ADX" in r:
                 continue  # ADX<25 趋势不明，不展示"ADX偏多"等
+            visible_buy.append(r)
             star = "★★★" if ("强烈" in r or "金叉" in r) else "★★☆"
             lines.append(f"  ✅ {r} {star}")
-    if adx_filtered and not buy_reasons_text:
+        # ADX 过滤后所有买入理由被压制 → 给上下文解释，避免沉默误导
+        if not visible_buy and adx_filtered:
+            lines.append(f"  💡 原始技术信号偏多，但 ADX={adx}<25 趋势不明确，综合降级为震荡观望")
+    elif adx_filtered:
         lines.append(f"  ✅ 无明显买入信号（ADX={adx}<25，震荡市谨慎操作）")
     if sell_reasons_text:
         for r in sell_reasons_text.split("；"):
@@ -2738,9 +2749,14 @@ def build_formatted_report(
         lines.append(f"  - 稳健策略：按当前价 {currency_symbol}{current_price} 分批减仓，止损设 {stop_str}")
         lines.append(f"  - 激进策略：现价直接清仓，等待下次买入信号")
     else:
-        lines.append(f"  - 保守策略：观望为主，等待明确信号")
-        lines.append(f"  - 稳健策略：暂不操作，等待指标进一步确认")
-        lines.append(f"  - 激进策略：若突破 {currency_symbol}{resistance_level if resistance_level else '—'} 可少量试探")
+        if adx_filtered:
+            lines.append(f"  - 保守策略：观望为主，等待 ADX>25（趋势明确）后再参考技术信号")
+            lines.append(f"  - 稳健策略：暂不操作，关注 ADX 回升至 25 以上再考虑入场")
+            lines.append(f"  - 激进策略：震荡市不建议操作，等 ADX>25 确认趋势后再行动")
+        else:
+            lines.append(f"  - 保守策略：观望为主，等待明确信号")
+            lines.append(f"  - 稳健策略：暂不操作，等待指标进一步确认")
+            lines.append(f"  - 激进策略：若突破 {currency_symbol}{resistance_level if resistance_level else '—'} 可少量试探")
     lines.append("")
     # V5.17.6: 基本面摘要
     if fundamentals and any(v is not None for v in fundamentals.values()):
