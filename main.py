@@ -19,8 +19,8 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.18（资金流向OBV+MFI+CMF+VWAP 14维评分）",
-    version="5.18.0",
+    description="股票/加密货币分析API - V5.18.1（股息率自算+RSI超买操作建议风控）",
+    version="5.18.1",
     servers=[{"url": "https://stock-analysis-api-n741.onrender.com", "description": "Render部署"}],
 )
 
@@ -971,13 +971,21 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             fundamentals["beta"] = round(info.get("beta", 0), 2) if info.get("beta") else None
             fundamentals["52w_high"] = info.get("fiftyTwoWeekHigh")
             fundamentals["52w_low"] = info.get("fiftyTwoWeekLow")
-            div_yield = info.get("dividendYield")
-            # yfinance 有时返回小数(0.0035=0.35%)，有时返回百分比(0.35=0.35%)
-            # 阈值>1判定为已是百分比格式，无需再*100
-            if div_yield and div_yield > 1:
-                fundamentals["dividend_yield"] = round(div_yield, 2)
-            elif div_yield:
-                fundamentals["dividend_yield"] = round(div_yield * 100, 2)
+            div_yield_raw = info.get("dividendYield")
+            div_rate = info.get("dividend_rate")  # 每股年股息
+            current_price = data['Close'].iloc[-1] if not data.empty else None
+            # V5.18.1: 股息率计算优先用 div_rate/price 自己算，避免 yfinance 返回格式不一致
+            if div_rate and current_price and current_price > 0:
+                fundamentals["dividend_yield"] = round(div_rate / current_price * 100, 2)
+            elif div_yield_raw is not None:
+                # yfinance 格式混乱：有时是小数(0.0035)，有时是百分比(0.35)，有时是乱值(35.0)
+                # 安全策略：如果值<1 说明是小数格式，需要*100；否则已是百分比
+                # 但 35% 显然不合理（苹果历史最高~2.5%），做合理性校验
+                if div_yield_raw < 1:
+                    computed = round(div_yield_raw * 100, 2)
+                    fundamentals["dividend_yield"] = computed if computed <= 15 else round(div_yield_raw, 2)
+                else:
+                    fundamentals["dividend_yield"] = round(div_yield_raw, 2) if div_yield_raw <= 15 else None
             else:
                 fundamentals["dividend_yield"] = None
         except Exception:
@@ -2991,23 +2999,24 @@ def build_formatted_report(
         res_pct = round((resistance_level - current_price) / current_price * 100, 1)
         lines.append(f"  • 阻力位：{currency_symbol}{resistance_level}（距当前 {res_pct:+}%）")
     lines.append("")
-    # 近期K线
-    lines.append("近期K线")
-    if kline_text:
-        for line in kline_text.split("\n"):
-            if line.strip():
-                lines.append(f"  {line.strip()}")
-    lines.append("")
     # 操作建议
     lines.append("操作建议")
+    # V5.18.1: RSI 超买(>80)或超卖(<20)时，操作建议提示风险
+    rsi_risk = rsi and (rsi > 80 or rsi < 20)
+    rsi_risk_note = "⚠️ RSI极度超买，回调风险高，建议等待回调" if rsi and rsi > 80 else ("⚠️ RSI极度超卖，反弹风险高，建议等待确认" if rsi and rsi < 20 else "")
+
     if signal in ("strong_buy", "buy"):
         lines.append(f"  - 保守策略：等待回调至支撑位 {currency_symbol}{support_level if support_level else '—'} 附近再入场")
         lines.append(f"  - 稳健策略：按入场价 {entry_str} 分批建仓，止损设 {stop_str}")
         lines.append(f"  - 激进策略：现价 {currency_symbol}{current_price} 直接入场，目标 {take_str}")
+        if rsi_risk_note:
+            lines.append(f"  {rsi_risk_note}")
     elif signal in ("strong_sell", "sell"):
         lines.append(f"  - 保守策略：继续持有观察，等待反弹至阻力位 {currency_symbol}{resistance_level if resistance_level else '—'} 再减仓")
         lines.append(f"  - 稳健策略：按当前价 {currency_symbol}{current_price} 分批减仓，止损设 {stop_str}")
         lines.append(f"  - 激进策略：现价直接清仓，等待下次买入信号")
+        if rsi_risk_note:
+            lines.append(f"  {rsi_risk_note}")
     else:
         if adx_filtered:
             lines.append(f"  - 保守策略：观望为主，等待 ADX>25（趋势明确）后再参考技术信号")
