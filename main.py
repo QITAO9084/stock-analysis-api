@@ -1059,13 +1059,22 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us"):
             if divergence_stocks:
                 summary["divergence_warnings"] = divergence_stocks
 
+        analysis_time = datetime.now().isoformat()
         return {
             "market": market,
             "total": len(results),
             "success": len(valid_results),
             "stocks_text": json.dumps(results, ensure_ascii=False),
             "summary_text": json.dumps(summary, ensure_ascii=False),
-            "analysis_time": datetime.now().isoformat()
+            "analysis_time": analysis_time,
+            # V5.12: API层预渲染多股对比报告
+            "formatted_report": build_compare_report(
+                market=market,
+                total=len(results),
+                success=len(valid_results),
+                stocks=results,
+                summary=summary,
+            ),
         }
 
     except HTTPException:
@@ -2269,6 +2278,120 @@ def build_scan_report(
 
     lines.append("---")
     lines.append("以上分析基于技术指标客观数据，仅供个人投资参考。股市有风险，投资需谨慎。")
+
+    return "\n".join(lines)
+
+
+def build_compare_report(
+    market, total, success,
+    stocks, summary,
+):
+    """
+    V5.12: API层预渲染多股对比分析报告。
+    输入：单股分析结果列表（stocks）+ 对比摘要字典（summary）
+    输出：完整中文对比报告，含对比表格和维度总结。
+    """
+    lines = []
+    market_cn = {"us": "美股", "hk": "港股", "cn": "A股"}.get(market, "美港股")
+    currency_map = {"us": "$", "hk": "HK$", "cn": "¥"}
+    cs = currency_map.get(market, "$")
+
+    lines.append(f"📊 多股对比分析报告（{market_cn}）")
+    lines.append(f"🔍 对比{total}只 → {success}只有效数据")
+    lines.append("")
+
+    # 信号映射
+    signal_cn_map = {
+        "strong_buy": "强烈买入", "buy": "建议买入",
+        "hold": "观望", "sell": "建议卖出", "strong_sell": "强烈卖出",
+    }
+
+    # 对比表格
+    lines.append("## 核心指标对比")
+    lines.append("")
+    lines.append("| 股票 | 现价 | 涨跌幅 | 信号 | RSI | MACD | KDJ-K | 量比 | ADX | ADX趋势 |")
+    lines.append("|------|------|--------|------|-----|------|-------|------|-----|---------|")
+
+    for s in stocks:
+        name = s.get("name", s.get("symbol", "?"))
+        symbol = s.get("symbol", "?")
+        if s.get("status") == "ok":
+            price = f"{cs}{s.get('current_price', '--')}"
+            change = f"{s.get('change_percent', 0):+}%"
+            sig = signal_cn_map.get(s.get("signal", "hold"), "观望")
+            rsi = s.get("rsi", "--")
+            macd_cross = {"golden": "金叉", "death": "死叉"}.get(s.get("macd_cross", "none"), "—")
+            kdj_k = s.get("kdj_k", "--")
+            vol = f"{s.get('volume_ratio', '--')}x"
+            adx = s.get("adx", "--")
+            adx_t = {"strong_bull": "强多", "weak_bull": "偏多", "strong_bear": "强空", "weak_bear": "偏空", "ranging": "震荡"}.get(s.get("adx_trend", ""), "—")
+            lines.append(f"| {name}({symbol}) | {price} | {change} | {sig} | {rsi} | {macd_cross} | {kdj_k} | {vol} | {adx} | {adx_t} |")
+        else:
+            lines.append(f"| {name}({symbol}) | — | — | ❌数据异常 | — | — | — | — | — | — |")
+
+    lines.append("")
+
+    # 单股详细信号
+    lines.append("## 单股信号详情")
+    lines.append("")
+    for s in stocks:
+        if s.get("status") != "ok":
+            continue
+        name = s.get("name", s.get("symbol", "?"))
+        symbol = s.get("symbol", "?")
+        sig_cn = signal_cn_map.get(s.get("signal", "hold"), "观望")
+        kdj_zone = "超卖区" if s.get("kdj_k", 50) < 20 else ("超买区" if s.get("kdj_k", 50) > 80 else "中性")
+        rsi_zone = "超买" if s.get("rsi", 50) > 70 else ("超卖" if s.get("rsi", 50) < 30 else "正常")
+
+        # RSI背离
+        div_type = s.get("rsi_divergence_type", "none")
+        div_desc = s.get("rsi_divergence_desc", "")
+        div_warning = f" ⚠️{div_desc}" if div_type != "none" else ""
+
+        lines.append(f"### {name}（{symbol}）")
+        lines.append(f"- 信号：{sig_cn}{div_warning}")
+        lines.append(f"- 价格：{cs}{s.get('current_price', '--')}（{s.get('change_percent', 0):+}%）")
+        lines.append(f"- RSI：{s.get('rsi', '--')}（{rsi_zone}）")
+        lines.append(f"- KDJ：K={s.get('kdj_k', '--')} / D={s.get('kdj_d', '--')}（{kdj_zone}）")
+        lines.append(f"- MACD：{s.get('macd_histogram', 0):.4f}（{'多头运行' if s.get('macd_histogram', 0) > 0 else '空头运行'}）")
+        lines.append(f"- ADX：{s.get('adx', '--')}（{'强势' if s.get('adx', 0) >= 25 else '弱势'}）")
+        sup = f"{cs}{s.get('support_level', '—')}" if s.get('support_level') and s.get('support_level') != 0 else "—"
+        res = f"{cs}{s.get('resistance_level', '—')}" if s.get('resistance_level') and s.get('resistance_level') != 0 else "—"
+        lines.append(f"- 支撑：{sup} / 阻力：{res}")
+        lines.append("")
+
+    # RSI背离预警
+    if summary.get("divergence_warnings"):
+        lines.append("## ⚠️ RSI背离预警")
+        lines.append("")
+        valid_stocks = [s for s in stocks if s.get("status") == "ok" and s.get("rsi_divergence_type") != "none"]
+        for s in valid_stocks:
+            desc = s.get("rsi_divergence_desc", "")
+            emoji = "🔴" if "bearish" in str(s.get("rsi_divergence_type", "")) else "🟢"
+            lines.append(f"- {emoji} {s.get('name', s.get('symbol', '?'))}（{s.get('symbol', '?')}）：{desc}")
+        lines.append("")
+
+    # 对比总结
+    lines.append("## 对比总结")
+    lines.append("")
+    if summary.get("best_performer"):
+        lines.append(f"- 🏆 涨幅最强：{summary['best_performer']['symbol']}（{summary['best_performer']['change']:+}%）")
+    if summary.get("worst_performer"):
+        lines.append(f"- 📉 跌幅最大：{summary['worst_performer']['symbol']}（{summary['worst_performer']['change']:+}%）")
+    if summary.get("rsi_highest"):
+        sym = summary["rsi_highest"]["symbol"]
+        rsi_v = summary["rsi_highest"]["rsi"]
+        lines.append(f"- 🔥 RSI最高：{sym}（{rsi_v}，{'超买区' if rsi_v >= 70 else '正常'}）")
+    if summary.get("rsi_lowest"):
+        sym = summary["rsi_lowest"]["symbol"]
+        rsi_v = summary["rsi_lowest"]["rsi"]
+        lines.append(f"- 🧊 RSI最低：{sym}（{rsi_v}，{'超卖区' if rsi_v <= 30 else '正常'}）")
+    if summary.get("strongest_trend"):
+        lines.append(f"- 📈 趋势最强：{summary['strongest_trend']['symbol']}（ADX={summary['strongest_trend']['adx']}，{summary['strongest_trend']['adx_trend']}）")
+
+    lines.append("")
+    lines.append("---")
+    lines.append("以上分析基于技术指标客观数据，仅供个人投资参考。投资有风险，入市需谨慎。")
 
     return "\n".join(lines)
 
