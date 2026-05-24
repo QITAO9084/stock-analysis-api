@@ -19,8 +19,8 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.18.2（信号源统一+KDJ/RSI标签修正+评级对齐）",
-    version="5.18.1",
+    description="股票/加密货币分析API - V5.18.3（价格精度修复：所有报表价格统一 .2f 格式化）",
+    version="5.18.3",
     servers=[{"url": "https://stock-analysis-api-n741.onrender.com", "description": "Render部署"}],
 )
 
@@ -2565,7 +2565,7 @@ def build_formatted_report(
     # 价格行
     change_sign = "+" if change_percent >= 0 else ""
     currency_symbol = "HK$" if currency == "HKD" else ("$" if currency == "USD" else "¥")
-    lines.append(f"💰 当前价格：{currency_symbol}{current_price}（{change_sign}{change_percent}%）")
+    lines.append(f"💰 当前价格：{currency_symbol}{current_price:.2f}（{change_sign}{change_percent}%）")
     # 信号 + 星级
     signal_cn_map = {
         "strong_buy": "强烈买入",
@@ -2595,9 +2595,9 @@ def build_formatted_report(
     if adx_filtered:
         lines.append(f"⚠️ ADX={adx}<25，趋势不明确，处于震荡市。以上评分仅供参考，不建议基于技术信号操作。")
     # 买卖点
-    entry_str = f"{currency_symbol}{entry_price}" if entry_price and entry_price != 0 else "—"
-    stop_str = f"{currency_symbol}{stop_loss}" if stop_loss and stop_loss != 0 else "—"
-    take_str = f"{currency_symbol}{take_profit}" if take_profit and take_profit != 0 else "—"
+    entry_str = f"{currency_symbol}{entry_price:.2f}" if entry_price and entry_price != 0 else "—"
+    stop_str = f"{currency_symbol}{stop_loss:.2f}" if stop_loss and stop_loss != 0 else "—"
+    take_str = f"{currency_symbol}{take_profit:.2f}" if take_profit and take_profit != 0 else "—"
     lines.append(f"🎯 买卖点：入场 {entry_str} / 止损 {stop_str} / 止盈 {take_str}")
     # V5.17.9: ADX<25 震荡市买卖点仅供参考
     if adx_filtered:
@@ -2816,7 +2816,7 @@ def build_formatted_report(
     lines.append(f"  CMF蔡金流：{cmf_score}分（{cmf_label}）")
 
     vwap_score = 0
-    vwap_label = f"${vwap_data['vwap']}" if vwap_data else "—"
+    vwap_label = f"${vwap_data['vwap']:.2f}" if vwap_data else "—"
     if vwap_data:
         if vwap_data["position"] == "above" and vwap_data["distance"] > 1:
             vwap_score = 3
@@ -2825,7 +2825,7 @@ def build_formatted_report(
             vwap_score = -3
             vwap_label = f"🔴低于VWAP（{vwap_data['distance']}%）"
         else:
-            vwap_label = f"${vwap_data['vwap']}（接近）"
+            vwap_label = f"${vwap_data['vwap']:.2f}（接近）"
     lines.append(f"  VWAP均价：{vwap_score}分（{vwap_label}）")
     lines.append("  " + "-" * 35)
     # V5.17.1: 多周期一致性折扣（提前计算，应用于总分）
@@ -3004,14 +3004,14 @@ def build_formatted_report(
     # V5.16: ATR波动率
     if atr:
         atr_pct = round(atr / current_price * 100, 2) if current_price else 0
-        lines.append(f"  • ATR(14)：{currency_symbol}{atr}（日波动 {atr_pct}%）")
+        lines.append(f"  • ATR(14)：{currency_symbol}{atr:.2f}（日波动 {atr_pct}%）")
     # 支撑阻力（百分比）
     if support_level and support_level != 0 and current_price != 0:
         sup_pct = round((support_level - current_price) / current_price * 100, 1)
-        lines.append(f"  • 支撑位：{currency_symbol}{support_level}（距当前 {sup_pct:+}%）")
+        lines.append(f"  • 支撑位：{currency_symbol}{support_level:.2f}（距当前 {sup_pct:+}%）")
     if resistance_level and resistance_level != 0 and current_price != 0:
         res_pct = round((resistance_level - current_price) / current_price * 100, 1)
-        lines.append(f"  • 阻力位：{currency_symbol}{resistance_level}（距当前 {res_pct:+}%）")
+        lines.append(f"  • 阻力位：{currency_symbol}{resistance_level:.2f}（距当前 {res_pct:+}%）")
     lines.append("")
     # 操作建议
     lines.append("操作建议")
@@ -3026,21 +3026,21 @@ def build_formatted_report(
         rsi_risk_note = "⚠️ RSI极度超买，回调风险高，建议等待回调" if rsi and rsi > 80 else ("⚠️ RSI极度超卖，反弹风险高，建议等待确认" if rsi and rsi < 20 else "")
 
         if signal in ("strong_buy", "buy"):
-            lines.append(f"  - 保守策略：等待回调至支撑位 {currency_symbol}{support_level if support_level else '—'} 附近再入场")
+            lines.append(f"  - 保守策略：等待回调至支撑位 {currency_symbol}{f'{support_level:.2f}' if support_level else '—'} 附近再入场")
             lines.append(f"  - 稳健策略：按入场价 {entry_str} 分批建仓，止损设 {stop_str}")
-            lines.append(f"  - 激进策略：现价 {currency_symbol}{current_price} 直接入场，目标 {take_str}")
+            lines.append(f"  - 激进策略：现价 {currency_symbol}{current_price:.2f} 直接入场，目标 {take_str}")
             if rsi_risk_note:
                 lines.append(f"  {rsi_risk_note}")
         elif signal in ("strong_sell", "sell"):
-            lines.append(f"  - 保守策略：继续持有观察，等待反弹至阻力位 {currency_symbol}{resistance_level if resistance_level else '—'} 再减仓")
-            lines.append(f"  - 稳健策略：按当前价 {currency_symbol}{current_price} 分批减仓，止损设 {stop_str}")
+            lines.append(f"  - 保守策略：继续持有观察，等待反弹至阻力位 {currency_symbol}{f'{resistance_level:.2f}' if resistance_level else '—'} 再减仓")
+            lines.append(f"  - 稳健策略：按当前价 {currency_symbol}{current_price:.2f} 分批减仓，止损设 {stop_str}")
             lines.append(f"  - 激进策略：现价直接清仓，等待下次买入信号")
             if rsi_risk_note:
                 lines.append(f"  {rsi_risk_note}")
         else:
             lines.append(f"  - 保守策略：观望为主，等待明确信号")
             lines.append(f"  - 稳健策略：暂不操作，等待指标进一步确认")
-            lines.append(f"  - 激进策略：若突破 {currency_symbol}{resistance_level if resistance_level else '—'} 可少量试探")
+            lines.append(f"  - 激进策略：若突破 {currency_symbol}{f'{resistance_level:.2f}' if resistance_level else '—'} 可少量试探")
     lines.append("")
     # V5.17.6: 基本面摘要
     if fundamentals and any(v is not None for v in fundamentals.values()):
@@ -3075,7 +3075,7 @@ def build_formatted_report(
             h52 = fundamentals["52w_high"]
             l52 = fundamentals["52w_low"]
             pos = round((current_price - l52) / (h52 - l52) * 100, 0) if h52 != l52 else 50
-            lines.append(f"  • 52周范围：{currency_symbol}{l52} — {currency_symbol}{h52}（当前处于 {pos:.0f}% 分位）")
+            lines.append(f"  • 52周范围：{currency_symbol}{l52:.2f} — {currency_symbol}{h52:.2f}（当前处于 {pos:.0f}% 分位）")
         if fundamentals.get("dividend_yield"):
             lines.append(f"  • 股息率：{fundamentals['dividend_yield']}%")
         lines.append("")
@@ -3132,7 +3132,7 @@ def build_tradepoint_report(
 
     change_sign = "+" if change_percent >= 0 else ""
     currency_symbol = "HK$" if currency == "HKD" else ("$" if currency == "USD" else "¥")
-    lines.append(f"💰 当前价格：{currency_symbol}{current_price}（{change_sign}{change_percent}%）")
+    lines.append(f"💰 当前价格：{currency_symbol}{current_price:.2f}（{change_sign}{change_percent}%）")
 
     tp_emoji_map = {
         "strong_buy": "🟢",
@@ -3170,9 +3170,9 @@ def build_tradepoint_report(
 
     # 价格建议
     lines.append("💰 价格建议")
-    entry_str = f"{currency_symbol}{entry_price}" if entry_price and entry_price != 0 else "—"
-    stop_str = f"{currency_symbol}{stop_loss}" if stop_loss and stop_loss != 0 else "—"
-    take_str = f"{currency_symbol}{take_profit}" if take_profit and take_profit != 0 else "—"
+    entry_str = f"{currency_symbol}{entry_price:.2f}" if entry_price and entry_price != 0 else "—"
+    stop_str = f"{currency_symbol}{stop_loss:.2f}" if stop_loss and stop_loss != 0 else "—"
+    take_str = f"{currency_symbol}{take_profit:.2f}" if take_profit and take_profit != 0 else "—"
     lines.append(f"  入场价：{entry_str}")
     lines.append(f"  止损价：{stop_str}")
     lines.append(f"  止盈价：{take_str}")
@@ -3206,10 +3206,10 @@ def build_tradepoint_report(
 
     if support_level and support_level != 0 and current_price != 0:
         sup_pct = round((support_level - current_price) / current_price * 100, 1)
-        lines.append(f"  • 支撑位：{currency_symbol}{support_level}（距当前 {sup_pct:+}%）")
+        lines.append(f"  • 支撑位：{currency_symbol}{support_level:.2f}（距当前 {sup_pct:+}%）")
     if resistance_level and resistance_level != 0 and current_price != 0:
         res_pct = round((resistance_level - current_price) / current_price * 100, 1)
-        lines.append(f"  • 阻力位：{currency_symbol}{resistance_level}（距当前 {res_pct:+}%）")
+        lines.append(f"  • 阻力位：{currency_symbol}{resistance_level:.2f}（距当前 {res_pct:+}%）")
 
     lines.append("")
     lines.append("=" * 40)
@@ -3245,7 +3245,7 @@ def build_crypto_report(
     lines.append("")
 
     change_sign = "+" if change_percent >= 0 else ""
-    lines.append(f"💰 当前价格：${current_price}（{change_sign}{change_percent}%）")
+    lines.append(f"💰 当前价格：${current_price:.2f}（{change_sign}{change_percent}%）")
 
     signal_cn_map = {
         "strong_buy": "强烈看多", "buy": "看多",
@@ -3340,12 +3340,12 @@ def build_crypto_report(
     # 操作建议
     lines.append("操作建议")
     if signal.lower() in ("strong_buy", "buy"):
-        lines.append(f"  - 保守策略：等待回调至支撑位 ${support_level if support_level else '—'} 附近再入场")
+        lines.append(f"  - 保守策略：等待回调至支撑位 ${f'{support_level:.2f}' if support_level else '—'} 附近再入场")
         lines.append(f"  - 稳健策略：分批建仓，控制仓位不超过总资金的20%")
-        lines.append(f"  - 激进策略：现价 ${current_price} 直接入场")
+        lines.append(f"  - 激进策略：现价 ${current_price:.2f} 直接入场")
     elif signal.lower() in ("strong_sell", "sell"):
-        lines.append(f"  - 保守策略：继续持有观察，等待反弹至阻力位 ${resistance_level if resistance_level else '—'} 再减仓")
-        lines.append(f"  - 稳健策略：按当前价 ${current_price} 分批减仓")
+        lines.append(f"  - 保守策略：继续持有观察，等待反弹至阻力位 ${f'{resistance_level:.2f}' if resistance_level else '—'} 再减仓")
+        lines.append(f"  - 稳健策略：按当前价 ${current_price:.2f} 分批减仓")
         lines.append(f"  - 激进策略：现价直接清仓，等待下次买入信号")
     else:
         lines.append(f"  - 保守策略：观望为主，等待明确信号")
@@ -3384,7 +3384,7 @@ def build_forex_report(
     lines.append("")
 
     change_sign = "+" if change_percent >= 0 else ""
-    lines.append(f"💰 当前汇率：{current_price}（{change_sign}{change_percent}%）")
+    lines.append(f"💰 当前汇率：{current_price:.4f}（{change_sign}{change_percent}%）")
 
     signal_cn_map = {
         "strong_buy": "强烈看多本币", "buy": "看多本币",
@@ -3442,11 +3442,11 @@ def build_forex_report(
 
     lines.append("操作建议")
     if signal.lower() in ("strong_buy", "buy"):
-        lines.append(f"  - 保守策略：等待回调至 {support_level if support_level else '近期低位'} 附近再购汇")
+        lines.append(f"  - 保守策略：等待回调至 {f'{support_level:.4f}' if support_level else '近期低位'} 附近再购汇")
         lines.append(f"  - 稳健策略：分批购汇，控制汇率波动风险")
-        lines.append(f"  - 激进策略：现价 {current_price} 直接购汇")
+        lines.append(f"  - 激进策略：现价 {current_price:.4f} 直接购汇")
     elif signal.lower() in ("strong_sell", "sell"):
-        lines.append(f"  - 保守策略：继续观察，等待反弹至 {resistance_level if resistance_level else '近期高位'} 再结汇")
+        lines.append(f"  - 保守策略：继续观察，等待反弹至 {f'{resistance_level:.4f}' if resistance_level else '近期高位'} 再结汇")
         lines.append(f"  - 稳健策略：分批结汇")
         lines.append(f"  - 激进策略：现价直接结汇")
     else:
@@ -3583,7 +3583,7 @@ def build_compare_report(
         name = s.get("name", s.get("symbol", "?"))
         symbol = s.get("symbol", "?")
         if s.get("status") == "ok":
-            price = f"{cs}{s.get('current_price', '--')}"
+            price = f"{cs}{s['current_price']:.2f}" if s.get('current_price') else "--"
             change = f"{s.get('change_percent', 0):+}%"
             sig = signal_cn_map.get(s.get("signal", "hold"), "观望")
             rsi = s.get("rsi", "--")
@@ -3617,13 +3617,14 @@ def build_compare_report(
 
         lines.append(f"### {name}（{symbol}）")
         lines.append(f"- 信号：{sig_cn}{div_warning}")
-        lines.append(f"- 价格：{cs}{s.get('current_price', '--')}（{s.get('change_percent', 0):+}%）")
+        price_str = f"{cs}{s['current_price']:.2f}" if s.get('current_price') else "--"
+        lines.append(f"- 价格：{price_str}（{s.get('change_percent', 0):+}%）")
         lines.append(f"- RSI：{s.get('rsi', '--')}（{rsi_zone}）")
         lines.append(f"- KDJ：K={s.get('kdj_k', '--')} / D={s.get('kdj_d', '--')}（{kdj_zone}）")
         lines.append(f"- MACD：{s.get('macd_histogram', 0):.4f}（{'多头运行' if s.get('macd_histogram', 0) > 0 else '空头运行'}）")
         lines.append(f"- ADX：{s.get('adx', '--')}（{'强势' if s.get('adx', 0) >= 25 else '弱势'}）")
-        sup = f"{cs}{s.get('support_level', '—')}" if s.get('support_level') and s.get('support_level') != 0 else "—"
-        res = f"{cs}{s.get('resistance_level', '—')}" if s.get('resistance_level') and s.get('resistance_level') != 0 else "—"
+        sup = f"{cs}{s['support_level']:.2f}" if s.get('support_level') and s.get('support_level') != 0 else "—"
+        res = f"{cs}{s['resistance_level']:.2f}" if s.get('resistance_level') and s.get('resistance_level') != 0 else "—"
         lines.append(f"- 支撑：{sup} / 阻力：{res}")
         lines.append("")
 
