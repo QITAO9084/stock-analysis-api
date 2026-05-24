@@ -12,8 +12,8 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.12（全端预渲染：7个端点全部输出 formatted_report，Agent 只做管道转发）",
-    version="5.12.0",
+    description="股票/加密货币分析API - V5.13（全端预渲染+排版优化+跨资产提示+信号准确率回测）",
+    version="5.13.0",
     servers=[{"url": "https://stock-analysis-api-n741.onrender.com", "description": "Render部署"}],
 )
 
@@ -861,6 +861,9 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
         buy_reasons_text = "；".join(trade_points["buy_reasons"]) if trade_points["buy_reasons"] else ""
         sell_reasons_text = "；".join(trade_points["sell_reasons"]) if trade_points["sell_reasons"] else ""
 
+        # V5.13: 信号准确率回测
+        accuracy_data = compute_signal_accuracy(data)
+
         # V5.11: API层预渲染报告，Agent只做管道转发
         formatted_report = build_formatted_report(
             name=str(info.get("longName", symbol)),
@@ -908,6 +911,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             kline_text="\n".join(kline_text_lines),
             rsi_div_type=str(indicators["rsi_divergence"]["type"]),
             rsi_div_desc=str(indicators["rsi_divergence"]["description"]),
+            accuracy_data=accuracy_data,
         )
 
         return {
@@ -919,8 +923,12 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             "currency": str(info.get("currency", "USD")),
             "market": str(market),
             "analysis_time": datetime.now().isoformat(),
-            # V5.11: 预渲染报告（Agent直接输出，无需加工）
+            # V5.13: 预渲染报告（Agent直接输出，无需加工）
             "formatted_report": formatted_report,
+            # V5.13: 信号准确率回测数据
+            "signal_accuracy": accuracy_data.get("accuracy"),
+            "signal_accuracy_days": accuracy_data.get("testable_days", 0),
+            "signal_accuracy_consistent": accuracy_data.get("consistent_days", 0),
             # 买卖信号
             "signal": str(signal_data["signal"]),
             "confidence": str(signal_data["confidence"]),
@@ -1646,6 +1654,68 @@ def detect_trade_points(data, symbol):
     }
 
 
+def compute_signal_accuracy(data):
+    """
+    简单回测：计算最近60个交易日信号方向与5日后实际价格方向的一致率。
+    
+    对于近60天中可验证的每一天，判断当日简化信号方向（看多/看空），
+    与该日之后5日实际涨跌对比，统计一致的比例。
+    
+    返回：{"accuracy": float, "testable_days": int, "consistent_days": int}
+    """
+    closes = data['Close']
+    if len(closes) < 30:
+        return {"accuracy": None, "testable_days": 0, "consistent_days": 0, "note": "数据不足30日，无法回测"}
+    
+    lookback = min(60, len(closes) - 6)  # 最多60天，且留5天未来窗口
+    if lookback < 5:
+        return {"accuracy": None, "testable_days": 0, "consistent_days": 0, "note": "数据量不足，无法回测"}
+    
+    consistent = 0
+    total = 0
+    
+    # 计算全序列 RSI（用于方向判断）
+    delta = closes.diff()
+    gain = delta.where(delta > 0, 0).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    rsi_full = 100 - (100 / (1 + rs))
+    
+    # 计算全序列 MACD
+    ema12 = closes.ewm(span=12, adjust=False).mean()
+    ema26 = closes.ewm(span=26, adjust=False).mean()
+    macd_full = ema12 - ema26
+    macd_signal_full = macd_full.ewm(span=9, adjust=False).mean()
+    
+    for i in range(len(closes) - lookback - 5, len(closes) - 5):
+        # 当日简化信号：RSI<30→看多，RSI>70→看空，MACD在信号线上→看多
+        rsi_i = rsi_full.iloc[i] if not pd.isna(rsi_full.iloc[i]) else 50
+        macd_i = macd_full.iloc[i]
+        sig_i = macd_signal_full.iloc[i]
+        
+        if rsi_i < 30 and macd_i > sig_i:
+            direction = "bull"
+        elif rsi_i > 70 and macd_i < sig_i:
+            direction = "bear"
+        elif macd_i > sig_i:
+            direction = "bull"
+        else:
+            direction = "bear"
+        
+        # 5日后是否涨
+        forward_return = closes.iloc[i + 5] - closes.iloc[i]
+        
+        if (direction == "bull" and forward_return > 0) or (direction == "bear" and forward_return < 0):
+            consistent += 1
+        total += 1
+    
+    if total == 0:
+        return {"accuracy": None, "testable_days": 0, "consistent_days": 0, "note": "无可用测试日"}
+    
+    accuracy = round(consistent / total * 100, 1)
+    return {"accuracy": accuracy, "testable_days": total, "consistent_days": consistent, "note": ""}
+
+
 def build_formatted_report(
     name, symbol, market, currency,
     current_price, change_percent,
@@ -1660,10 +1730,11 @@ def build_formatted_report(
     ma5, ma10, ma20, ma50,
     volume_signal, volume_ratio, trend_direction,
     support_level, resistance_level,
-    kline_text, rsi_div_type, rsi_div_desc
+    kline_text, rsi_div_type, rsi_div_desc,
+    accuracy_data=None
 ):
     """
-    V5.11: API层预渲染完整中文分析报告。
+    V5.13: API层预渲染完整中文分析报告（含信号准确率回测）。
     由 API 直接生成格式化报告文本，Agent 只做管道转发，彻底消灭 Agent 创作空间。
     """
     lines = []
@@ -1697,7 +1768,7 @@ def build_formatted_report(
     stop_str = f"{currency_symbol}{stop_loss}" if stop_loss and stop_loss != 0 else "—"
     take_str = f"{currency_symbol}{take_profit}" if take_profit and take_profit != 0 else "—"
     lines.append(f"🎯 买卖点：入场 {entry_str} / 止损 {stop_str} / 止盈 {take_str}")
-    lines.append("---")
+    lines.append("=" * 40)
     # RSI背离警告（P0）
     if rsi_div_type and rsi_div_type != "none":
         lines.append(f"⚠️ RSI背离信号：{rsi_div_desc}")
@@ -1707,9 +1778,9 @@ def build_formatted_report(
     elif rsi < 15:
         lines.append(f"⚠️ 检测到极端超卖指标（RSI {rsi}），建议等待信号冷却后再操作。")
     lines.append("")
-
-    # ===== 技术评分明细 =====
-    lines.append("📊 技术评分明细（满分±100）")
+    lines.append("=" * 40)
+    lines.append("📊 技术评分明细（满分 ±100）")
+    lines.append("=" * 40)
     # RSI背离评分
     div_score = 0
     if rsi_div_type == "bullish_divergence":
@@ -1800,33 +1871,24 @@ def build_formatted_report(
     elif current_price >= boll_upper * 0.99:
         boll_score = -3
     lines.append(f"  布林带：{boll_score}分（上轨{boll_upper}，下轨{boll_lower}）")
-    lines.append("  " + "─" * 30)
+    lines.append("  " + "-" * 35)
     total_score = div_score + adx_score + macd_score + kdj_score + rsi_score + ma_score + vol_score + boll_score
     total_score = max(-100, min(100, total_score))
     final_signal = signal_cn
     lines.append(f"  总分：{total_score} → {final_signal} {stars}（{conf_cn}）")
+    lines.append("=" * 40)
     lines.append("")
-    # 核心信号汇总（取自 key_signals，这里用买卖理由代替）
-    lines.append("核心信号汇总")
+    lines.append("关键信号触发原因")
     if buy_reasons_text:
         for r in buy_reasons_text.split("；"):
             if r.strip():
-                lines.append(f"  - {r.strip()} ★★★" if "强烈" in r or "金叉" in r else (f"  - {r.strip()} ★★☆" if r.strip() else ""))
+                star = "★★★" if ("强烈" in r or "金叉" in r) else "★★☆"
+                lines.append(f"  ✅ {r.strip()} {star}")
     if sell_reasons_text:
         for r in sell_reasons_text.split("；"):
             if r.strip():
-                lines.append(f"  - {r.strip()} ★★☆" if "死叉" in r or "强烈" in r else (f"  - {r.strip()} ★☆☆" if r.strip() else ""))
-    lines.append("")
-    # 买卖点触发原因
-    lines.append("买卖点触发原因")
-    if buy_reasons_text:
-        for r in buy_reasons_text.split("；"):
-            if r.strip():
-                lines.append(f"  - ✅ {r.strip()}")
-    if sell_reasons_text:
-        for r in sell_reasons_text.split("；"):
-            if r.strip():
-                lines.append(f"  - ❌ {r.strip()}")
+                star = "★★☆" if ("死叉" in r or "强烈" in r) else "★☆☆"
+                lines.append(f"  ❌ {r.strip()} {star}")
     lines.append("")
     # 技术面详情
     lines.append("技术面详情")
@@ -1870,8 +1932,17 @@ def build_formatted_report(
         lines.append(f"  - 稳健策略：可小仓位试探，止损设 {currency_symbol}{support_level if support_level else '—'}")
         lines.append(f"  - 激进策略：短线操作者可在支撑位 {currency_symbol}{support_level if support_level else '—'} 附近抢反弹")
     lines.append("")
-    lines.append("---")
+    lines.append("=" * 40)
     lines.append("以上分析基于技术指标客观数据，仅供个人投资参考。股市有风险，投资需谨慎。")
+    lines.append("💡 跨资产参考：加密货币 BTC/USDT 和汇率 USD/JPY 可作为市场情绪的辅助验证指标。")
+    if accuracy_data and accuracy_data.get("testable_days", 0) > 0:
+        acc = accuracy_data.get("accuracy")
+        days = accuracy_data.get("testable_days", 0)
+        if acc is not None:
+            lines.append(f"📈 信号准确率回测：近{days}个交易日，信号方向与实际涨跌一致率 {acc}%（{accuracy_data.get('consistent_days', 0)}/{days}）")
+        elif accuracy_data.get("note"):
+            lines.append(f"📈 信号准确率回测：{accuracy_data['note']}")
+    lines.append("=" * 40)
 
     return "\n".join(lines)
 
@@ -1910,7 +1981,7 @@ def build_tradepoint_report(
     tp_emoji = tp_emoji_map.get(trade_point, "⚪")
     lines.append(f"🎯 买卖点类型：{tp_emoji} {trade_point_cn}")
     lines.append(f"📊 综合评分：{score:+}")
-    lines.append("---")
+    lines.append("=" * 40)
 
     # 买入理由
     lines.append("✅ 买入理由")
@@ -1970,8 +2041,10 @@ def build_tradepoint_report(
         lines.append(f"  • 阻力位：{currency_symbol}{resistance_level}（距当前 {res_pct:+}%）")
 
     lines.append("")
-    lines.append("---")
+    lines.append("=" * 40)
     lines.append("以上分析基于技术指标客观数据，仅供个人投资参考。股市有风险，投资需谨慎。")
+    lines.append("💡 跨资产参考：加密货币 BTC/USDT 和汇率 USD/JPY 可作为市场情绪的辅助验证指标。")
+    lines.append("=" * 40)
 
     return "\n".join(lines)
 
@@ -2032,7 +2105,7 @@ def build_crypto_report(
         stars = "★☆☆"
     conf_cn = {"high": "强", "medium": "中等", "low": "弱"}.get(confidence.lower() if confidence else "medium", "中等")
     lines.append(f"📌 综合信号：{signal_cn} {stars}（{conf_cn}）")
-    lines.append("---")
+    lines.append("=" * 40)
 
     # RSI背离 + 极端警告
     if rsi_div_type and rsi_div_type != "none":
@@ -2108,7 +2181,7 @@ def build_crypto_report(
         lines.append(f"  - 稳健策略：可小仓位试探")
         lines.append(f"  - 激进策略：短线操作者可在支撑位附近抢反弹")
     lines.append("")
-    lines.append("---")
+    lines.append("=" * 40)
     lines.append("以上分析基于技术指标客观数据，仅供个人投资参考。加密货币波动剧烈，投资需谨慎。")
 
     return "\n".join(lines)
@@ -2152,7 +2225,7 @@ def build_forex_report(
 
     if volatility_20d:
         lines.append(f"📈 20日波动率：{volatility_20d}%")
-    lines.append("---")
+    lines.append("=" * 40)
 
     if rsi_div_type and rsi_div_type != "none":
         lines.append(f"⚠️ RSI背离信号：{rsi_div_desc}")
@@ -2210,7 +2283,7 @@ def build_forex_report(
         lines.append(f"  - 稳健策略：可小金额试探性操作")
         lines.append(f"  - 激进策略：短线操作者可在支撑位附近抢反弹")
     lines.append("")
-    lines.append("---")
+    lines.append("=" * 40)
     lines.append("以上分析基于技术指标客观数据，仅供个人参考。汇率波动受多重因素影响，投资需谨慎。")
 
     return "\n".join(lines)
@@ -2233,7 +2306,7 @@ def build_scan_report(
     lines.append(f"🔍 扫描结果：扫描{total_scanned}只 → 发现{total_signals}个信号")
     if failed_count > 0:
         lines.append(f"⚠️ 失败：{failed_count}只（数据获取异常）")
-    lines.append("---")
+    lines.append("=" * 40)
 
     # 买入信号
     buy_count = len(buy_stocks)
@@ -2294,8 +2367,9 @@ def build_scan_report(
         lines.append("  无")
     lines.append("")
 
-    lines.append("---")
+    lines.append("=" * 40)
     lines.append("以上分析基于技术指标客观数据，仅供个人投资参考。股市有风险，投资需谨慎。")
+    lines.append("💡 跨资产参考：加密货币 BTC/USDT 和汇率 USD/JPY 可作为市场情绪的辅助验证指标。")
 
     return "\n".join(lines)
 
@@ -2408,8 +2482,9 @@ def build_compare_report(
         lines.append(f"- 📈 趋势最强：{summary['strongest_trend']['symbol']}（ADX={summary['strongest_trend']['adx']}，{summary['strongest_trend']['adx_trend']}）")
 
     lines.append("")
-    lines.append("---")
+    lines.append("=" * 40)
     lines.append("以上分析基于技术指标客观数据，仅供个人投资参考。投资有风险，入市需谨慎。")
+    lines.append("💡 跨资产参考：加密货币 BTC/USDT 和汇率 USD/JPY 可作为市场情绪的辅助验证指标。")
 
     return "\n".join(lines)
 
