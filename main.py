@@ -2514,12 +2514,31 @@ def build_formatted_report(
         boll_score = -3
     lines.append(f"  布林带：{boll_score}分（上轨{boll_upper}，下轨{boll_lower}）")
     lines.append("  " + "-" * 35)
+    # V5.17.1: 多周期一致性折扣（提前计算，应用于总分）
+    mt_discount = 0
+    if weekly_trend and monthly_trend:
+        week_label = weekly_trend.get("label", "—")
+        month_label = monthly_trend.get("label", "—")
+        periods = [("日线", signal_cn), ("周线", week_label), ("月线", month_label)]
+        bullish_count = sum(1 for _, t in periods if "买" in t or "多" in t or "涨" in t or "强" in t)
+        bearish_count = sum(1 for _, t in periods if "卖" in t or "空" in t or "跌" in t)
+        if bullish_count == 3 or bearish_count == 3:
+            mt_discount = 10  # 三线共振 +10
+        elif bullish_count == 0 and bearish_count == 0:
+            mt_discount = -5  # 三线分歧 -5
     total_score = div_score + adx_score + macd_score + kdj_score + rsi_score + ma_score + vol_score + boll_score + cp_score + vd_score
     # V5.14: 大盘环境系数调整
     total_score = total_score * market_coef
+    # V5.17.1: 多周期一致性折扣
+    total_score = total_score + mt_discount
     total_score = max(-100, min(100, round(total_score, 0)))
     final_signal = signal_cn
-    mt_note = f"（含大盘{market_coef:.0%}系数调整）" if market_coef != 1.0 else ""
+    mt_notes = []
+    if market_coef != 1.0:
+        mt_notes.append(f"大盘{market_coef:.0%}系数")
+    if mt_discount != 0:
+        mt_notes.append(f"多周期{"+" if mt_discount > 0 else ""}{mt_discount}分")
+    mt_note = f"（含{','.join(mt_notes)}调整）" if mt_notes else ""
     lines.append(f"  总分：{int(total_score)} → {final_signal} {stars}（{conf_cn}）{mt_note}")
     lines.append("=" * 40)
     lines.append("")
@@ -2581,10 +2600,10 @@ def build_formatted_report(
         bearish_count = sum(1 for t in trends if "卖" in t or "空" in t)
         if bullish_count == 3:
             mt_label = "🔥 三线共振看多 — 信号置信度极高"
-            mt_bonus = "（+10分置信加分）"
+            mt_bonus = "（+10分已计入总分）"
         elif bearish_count == 3:
             mt_label = "⚠️ 三线共振看空 — 信号置信度极高"
-            mt_bonus = "（+10分置信加分）"
+            mt_bonus = "（+10分已计入总分）"
         elif bullish_count == 2:
             mt_label = "✅ 双线看多，日线信号可信度较高"
             mt_bonus = ""
@@ -2593,7 +2612,7 @@ def build_formatted_report(
             mt_bonus = ""
         else:
             mt_label = "⚠️ 三线分歧 — 日线信号可能为假突破，建议观望"
-            mt_bonus = "（-5分可信度折扣）"
+            mt_bonus = "（-5分已计入总分）"
 
         lines.append(f"  {'':4}日线：{signal_cn}（RSI={rsi}）")
         lines.append(f"  {'':4}周线：{week_label}（RSI={week_rsi}，{weekly_trend.get('price_vs_ma20','—')}）")
@@ -2661,7 +2680,7 @@ def build_formatted_report(
         acc = accuracy_data.get("accuracy")
         days = accuracy_data.get("testable_days", 0)
         if acc is not None:
-            lines.append(f"📈 信号准确率回测（V5.15 对齐真实买卖信号）：近{days}个有效信号日，方向与实际涨跌一致率 {acc}%（{accuracy_data.get('consistent_days', 0)}/{days}）")
+            lines.append(f"📈 信号准确率回测（V5.17 10维对齐真实买卖信号）：近{days}个有效信号日，方向与实际涨跌一致率 {acc}%（{accuracy_data.get('consistent_days', 0)}/{days}）")
         elif accuracy_data.get("note"):
             lines.append(f"📈 信号准确率回测：{accuracy_data['note']}")
     elif accuracy_data and accuracy_data.get("note"):
