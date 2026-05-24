@@ -2612,7 +2612,7 @@ def build_formatted_report(
     lines.append(f"  • 成交量：{vol_cn}（比率{volume_ratio}x）")
     trend_cn = {"bullish": "偏多", "bearish": "偏空", "neutral": "震荡"}.get(trend_direction, "震荡")
     # 与 signal 对齐：观望信号时趋势描述需保守
-    if signal in ("hold",):
+    if signal.lower() in ("hold",):
         if trend_direction == "bullish":
             trend_cn = "偏多（但信号观望，需确认）"
         elif trend_direction == "bearish":
@@ -2756,7 +2756,7 @@ def build_tradepoint_report(
     lines.append(f"  • 成交量比率：{vol_cn}")
     trend_cn = {"bullish": "偏多", "bearish": "偏空", "neutral": "震荡"}.get(trend_direction, "震荡")
     # 与 signal 对齐：观望信号时趋势描述需保守
-    if signal in ("hold",):
+    if signal.lower() in ("hold",):
         if trend_direction == "bullish":
             trend_cn = "偏多（但信号观望，需确认）"
         elif trend_direction == "bearish":
