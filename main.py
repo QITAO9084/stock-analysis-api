@@ -909,6 +909,25 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
         except Exception:
             pass
 
+        # V5.17.6: 基本面摘要
+        fundamentals = {}
+        try:
+            pe = info.get("trailingPE")
+            fwd_pe = info.get("forwardPE")
+            mcap = info.get("marketCap")
+            fundamentals["pe"] = round(pe, 1) if pe else None
+            fundamentals["forward_pe"] = round(fwd_pe, 1) if fwd_pe else None
+            fundamentals["market_cap"] = mcap
+            fundamentals["sector"] = info.get("sector", "") or ""
+            fundamentals["industry"] = info.get("industry", "") or ""
+            fundamentals["beta"] = round(info.get("beta", 0), 2) if info.get("beta") else None
+            fundamentals["52w_high"] = info.get("fiftyTwoWeekHigh")
+            fundamentals["52w_low"] = info.get("fiftyTwoWeekLow")
+            div_yield = info.get("dividendYield")
+            fundamentals["dividend_yield"] = round(div_yield * 100, 2) if div_yield else None
+        except Exception:
+            pass
+
         # V5.11: API层预渲染报告，Agent只做管道转发
         formatted_report, score_data = build_formatted_report(
             name=str(info.get("longName", symbol)),
@@ -963,6 +982,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             candle_patterns=candle_patterns,
             vol_divergences=vol_divergences,
             atr=trade_points.get("atr"),
+            fundamentals=fundamentals,
         )
 
         return {
@@ -2315,7 +2335,7 @@ def build_formatted_report(
     support_level, resistance_level,
     kline_text, rsi_div_type, rsi_div_desc,
     accuracy_data=None, weekly_trend=None, monthly_trend=None, market_trend=None,
-    candle_patterns=None, vol_divergences=None, atr=None
+    candle_patterns=None, vol_divergences=None, atr=None, fundamentals=None
 ):
     """
     V5.14: API层预渲染完整中文分析报告（含多周期共振+大盘环境+信号准确率回测）。
@@ -2346,7 +2366,15 @@ def build_formatted_report(
     else:
         stars = "★☆☆"
     conf_cn = {"high": "强", "medium": "中等", "low": "弱"}.get(confidence, "中等")
+    # V5.17.6: ADX<25 震荡市过滤 — 趋势不明朗时压制信号
+    adx_filtered = adx < 25 and signal_cn != "观望"
+    if adx_filtered:
+        signal_cn = "震荡观望"
+        stars = "— — —"
+        conf_cn = "弱"
     lines.append(f"📌 综合信号：{signal_cn} {stars}（{conf_cn}）")
+    if adx_filtered:
+        lines.append(f"⚠️ ADX={adx}<25，趋势不明确，处于震荡市。以上评分仅供参考，不建议基于技术信号操作。")
     # 买卖点
     entry_str = f"{currency_symbol}{entry_price}" if entry_price and entry_price != 0 else "—"
     stop_str = f"{currency_symbol}{stop_loss}" if stop_loss and stop_loss != 0 else "—"
@@ -2695,6 +2723,43 @@ def build_formatted_report(
         lines.append(f"  - 稳健策略：暂不操作，等待指标进一步确认")
         lines.append(f"  - 激进策略：若突破 {currency_symbol}{resistance_level if resistance_level else '—'} 可少量试探")
     lines.append("")
+    # V5.17.6: 基本面摘要
+    if fundamentals and any(v is not None for v in fundamentals.values()):
+        lines.append("=" * 40)
+        lines.append("📋 基本面速览")
+        lines.append("=" * 40)
+        if fundamentals.get("pe"):
+            lines.append(f"  • 市盈率(TTM)：{fundamentals['pe']}")
+        if fundamentals.get("forward_pe"):
+            lines.append(f"  • 远期市盈率：{fundamentals['forward_pe']}")
+        if fundamentals.get("market_cap"):
+            mcap = fundamentals["market_cap"]
+            if mcap >= 1e12:
+                mcap_str = f"{mcap/1e12:.2f}万亿"
+            elif mcap >= 1e8:
+                mcap_str = f"{mcap/1e8:.0f}亿"
+            else:
+                mcap_str = f"{mcap/1e6:.0f}百万"
+            lines.append(f"  • 市值：{currency_symbol}{mcap_str}")
+        if fundamentals.get("sector") or fundamentals.get("industry"):
+            sector = fundamentals.get("sector", "")
+            industry = fundamentals.get("industry", "")
+            if sector and industry:
+                lines.append(f"  • 行业：{sector} / {industry}")
+            elif sector:
+                lines.append(f"  • 行业：{sector}")
+        if fundamentals.get("beta"):
+            beta = fundamentals["beta"]
+            beta_label = "高波动" if beta > 1.5 else ("中等波动" if beta > 1.0 else "低波动")
+            lines.append(f"  • Beta：{beta}（{beta_label}）")
+        if fundamentals.get("52w_high") and fundamentals.get("52w_low"):
+            h52 = fundamentals["52w_high"]
+            l52 = fundamentals["52w_low"]
+            pos = round((current_price - l52) / (h52 - l52) * 100, 0) if h52 != l52 else 50
+            lines.append(f"  • 52周范围：{currency_symbol}{l52} — {currency_symbol}{h52}（当前处于 {pos:.0f}% 分位）")
+        if fundamentals.get("dividend_yield"):
+            lines.append(f"  • 股息率：{fundamentals['dividend_yield']}%")
+        lines.append("")
     lines.append("=" * 40)
     lines.append("以上分析基于技术指标客观数据，仅供个人投资参考。股市有风险，投资需谨慎。")
     lines.append("💡 跨资产参考：加密货币 BTC/USDT 和汇率 USD/JPY 可作为市场情绪的辅助验证指标。")
@@ -2702,11 +2767,12 @@ def build_formatted_report(
         acc = accuracy_data.get("accuracy")
         days = accuracy_data.get("testable_days", 0)
         if acc is not None:
-            lines.append(f"📈 信号准确率回测（V5.17 10维对齐真实买卖信号）：近{days}个有效信号日，方向与实际涨跌一致率 {acc}%（{accuracy_data.get('consistent_days', 0)}/{days}）")
+            lines.append(f"📈 方向一致率回测：近{days}个有效信号日，信号方向与实际走势一致率 {acc}%（{accuracy_data.get('consistent_days', 0)}/{days}）")
+            lines.append("💡 技术分析靠 R:R 不对称获利（小亏大赚），不追求高胜率。一只大赚可覆盖多笔小亏。")
         elif accuracy_data.get("note"):
-            lines.append(f"📈 信号准确率回测：{accuracy_data['note']}")
+            lines.append(f"📈 方向一致率回测：{accuracy_data['note']}")
     elif accuracy_data and accuracy_data.get("note"):
-        lines.append(f"📈 信号准确率回测：{accuracy_data['note']}")
+        lines.append(f"📈 方向一致率回测：{accuracy_data['note']}")
     lines.append("=" * 40)
 
     # V5.17.5: 返回评分明细供 API 端点使用
