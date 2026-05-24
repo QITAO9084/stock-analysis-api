@@ -962,6 +962,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             market_trend=market_trend,
             candle_patterns=candle_patterns,
             vol_divergences=vol_divergences,
+            atr=trade_points.get("atr"),
         )
 
         return {
@@ -1696,23 +1697,35 @@ def detect_trade_points(data, symbol):
     else:
         trade_point = "hold"
 
-    # 建议价格（基于近期高低点）
+    # 建议价格（基于ATR动态止损 + 近期高低点）
     recent_low = data['Low'].tail(20).min()
     recent_high = data['High'].tail(20).max()
-    atr = (data['High'].tail(14).max() - data['Low'].tail(14).min()) / 14  # 简化ATR
+    # V5.16: 改进ATR计算（14日真实波幅均值，替代单点范围/14）
+    highs = data['High'].tail(15).values
+    lows = data['Low'].tail(15).values
+    recent_closes = data['Close'].tail(15).values
+    trs = []
+    for i in range(1, len(highs)):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - recent_closes[i-1]),
+            abs(lows[i] - recent_closes[i-1])
+        )
+        trs.append(tr)
+    atr = round(sum(trs) / len(trs), 2) if trs else 0
 
     if trade_point in ("strong_buy", "buy"):
-        entry_price = round(current_price * 0.995, 2)   # 稍低于当前价
-        stop_loss = round(recent_low * 0.98, 2)          # 近期低点下方2%
-        take_profit = round(current_price + atr * 3, 2)  # 3倍ATR
+        entry_price = round(current_price * 0.995, 2)       # 稍低于当前价
+        stop_loss = round(entry_price - atr * 2, 2)         # 2倍ATR动态止损
+        take_profit = round(entry_price + atr * 3, 2)       # 3倍ATR止盈
     elif trade_point in ("strong_sell", "sell"):
-        entry_price = 0  # 卖出不需要入场价
-        stop_loss = 0
-        take_profit = round(recent_low * 1.02, 2)       # 回落到近期低点附近
-    else:
         entry_price = 0
-        stop_loss = round(recent_low * 0.97, 2)
-        take_profit = round(recent_high * 1.03, 2)
+        stop_loss = 0
+        take_profit = round(recent_low * 1.02, 2)
+    else:
+        entry_price = round(current_price * 0.995, 2)       # V5.16: 观望也给出入场参考
+        stop_loss = round(entry_price - atr * 2, 2)         # 2倍ATR动态止损
+        take_profit = round(entry_price + atr * 3, 2)       # 3倍ATR止盈
 
     return {
         "trade_point": trade_point,
@@ -1723,6 +1736,7 @@ def detect_trade_points(data, symbol):
         "entry_price": entry_price,
         "stop_loss": stop_loss,
         "take_profit": take_profit,
+        "atr": atr,                                   # V5.16: 14日ATR波动率
         "score": score,
         "adx": round(adx_val, 2),                   # V5.9: ADX数值
         "adx_trend": adx_trend,                      # V5.9: ADX趋势类型
@@ -2226,7 +2240,7 @@ def build_formatted_report(
     support_level, resistance_level,
     kline_text, rsi_div_type, rsi_div_desc,
     accuracy_data=None, weekly_trend=None, monthly_trend=None, market_trend=None,
-    candle_patterns=None, vol_divergences=None
+    candle_patterns=None, vol_divergences=None, atr=None
 ):
     """
     V5.14: API层预渲染完整中文分析报告（含多周期共振+大盘环境+信号准确率回测）。
@@ -2263,6 +2277,13 @@ def build_formatted_report(
     stop_str = f"{currency_symbol}{stop_loss}" if stop_loss and stop_loss != 0 else "—"
     take_str = f"{currency_symbol}{take_profit}" if take_profit and take_profit != 0 else "—"
     lines.append(f"🎯 买卖点：入场 {entry_str} / 止损 {stop_str} / 止盈 {take_str}")
+    # V5.16: 风险收益比
+    if entry_price and stop_loss and take_profit and entry_price != 0 and stop_loss != 0:
+        risk = abs(entry_price - stop_loss)
+        reward = abs(take_profit - entry_price)
+        if risk > 0:
+            rr = round(reward / risk, 1)
+            lines.append(f"📐 风险收益比：R:R = 1:{rr}（每承担{currency_symbol}1风险，预期收益{currency_symbol}{rr}）")
     lines.append("=" * 40)
     # RSI背离警告（P0）
     if rsi_div_type and rsi_div_type != "none":
@@ -2520,6 +2541,10 @@ def build_formatted_report(
     lines.append(f"  • 成交量：{vol_cn}（比率{volume_ratio}x）")
     trend_cn = {"bullish": "看涨", "bearish": "看跌", "ranging": "震荡"}.get(trend_direction, "震荡")
     lines.append(f"  • 趋势方向：{trend_cn}")
+    # V5.16: ATR波动率
+    if atr:
+        atr_pct = round(atr / current_price * 100, 2) if current_price else 0
+        lines.append(f"  • ATR(14)：{currency_symbol}{atr}（日波动 {atr_pct}%）")
     # 支撑阻力（百分比）
     if support_level and support_level != 0 and current_price != 0:
         sup_pct = round((support_level - current_price) / current_price * 100, 1)
