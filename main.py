@@ -19,8 +19,8 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.15（准确率回测对齐+K线形态+成交量背离）",
-    version="5.14.0",
+    description="股票/加密货币分析API - V5.17（10维回测对齐+ATR止损+R:R+负面因素）",
+    version="5.17.0",
     servers=[{"url": "https://stock-analysis-api-n741.onrender.com", "description": "Render部署"}],
 )
 
@@ -2045,14 +2045,15 @@ def detect_volume_divergence(closes, volumes):
 
 def compute_signal_accuracy(data):
     """
-    V5.15: 信号准确率回测 — 使用与 detect_trade_points 相同的多因子信号判定逻辑。
+    V5.17: 信号准确率回测 — 使用与 detect_trade_points 完全一致的10维评分逻辑。
     
-    在最近60个交易日窗口内，逐日使用完整的7维评分体系判定买卖信号方向，
+    在最近60个交易日窗口内，逐日使用完整的10维打分体系判定买卖信号，
     追踪信号触发后5日的实际走势，统计方向一致率。
     
-    只统计有明确方向信号的日子（|净分| >= 1），中性日跳过。
+    10个维度：MACD金叉/死叉、RSI超卖/超买、KDJ极端值、成交量、布林带、
+    均线回踩、ADX趋势强度、RSI背离、K线形态、成交量背离。
     
-    返回：{"accuracy": float, "testable_days": int, "consistent_days": int, "note": str}
+    只统计有明确方向信号的日子（trade_point != hold），中性日跳过。
     """
     closes = data['Close']
     highs = data['High']
@@ -2100,7 +2101,6 @@ def compute_signal_accuracy(data):
     # MA
     ma5_series = closes.rolling(5).mean()
     ma10_series = closes.rolling(10).mean()
-    # ma20_series already computed
     ma50_series = closes.rolling(50).mean()
     
     # Volume ratio
@@ -2109,101 +2109,172 @@ def compute_signal_accuracy(data):
     consistent = 0
     total = 0
     
-    for i in range(n - lookback - 5, n - 5):
-        buy_score = 0
-        sell_score = 0
+    # 回测起始位置（至少需要50根K线做MA50+RSI背离+ADX计算）
+    start = max(n - lookback - 5, 50)
+    if start >= n - 5:
+        return {"accuracy": None, "testable_days": 0, "consistent_days": 0, "note": "数据量不足（需>=50日），无法回测"}
+    
+    for i in range(start, n - 5):
+        buy_count = 0.0
+        sell_count = 0.0
         
-        # 1. RSI（V5.14 细粒度）
+        # 当日数据切片（用于调用与detect_trade_points相同的函数）
+        sub_data = data.iloc[:i + 1]
+        
         rsi_i = rsi_series.iloc[i]
-        if not pd.isna(rsi_i):
-            if rsi_i < 20:
-                buy_score += 4
-            elif rsi_i < 30:
-                buy_score += 2
-            elif rsi_i < 45:
-                buy_score += 1
-            if rsi_i > 80:
-                sell_score += 4
-            elif rsi_i > 70:
-                sell_score += 2
-            elif rsi_i > 60:
-                sell_score += 1
+        rsi_prev = rsi_series.iloc[i - 1] if i > 0 else rsi_i
+        curr_close = closes.iloc[i]
+        curr_open = opens.iloc[i]
+        curr_high = highs.iloc[i]
+        curr_low = lows.iloc[i]
+        is_green = curr_close > curr_open
+        prev_close = closes.iloc[i - 1] if i > 0 else curr_close
         
-        # 2. MACD
+        # ========== 1. MACD金叉/死叉（对齐detect_trade_points） ==========
         macd_i = macd_series.iloc[i]
-        signal_i = sig_series.iloc[i]
+        sig_i = sig_series.iloc[i]
         hist_i = hist_series.iloc[i]
-        if not pd.isna(macd_i):
-            if macd_i > signal_i and hist_i > 0:
-                buy_score += 2
-            if macd_i < signal_i and hist_i < 0:
-                sell_score += 2
-            # MACD柱萎缩
-            if i > 0:
-                prev_hist = hist_series.iloc[i - 1]
-                if not pd.isna(prev_hist) and abs(hist_i) > 0.5:
-                    if hist_i > 0 and hist_i < prev_hist:
-                        sell_score += 1
-                    elif hist_i < 0 and hist_i > prev_hist:
-                        buy_score += 1
+        if i > 0 and not pd.isna(macd_i):
+            prev_macd = macd_series.iloc[i - 1]
+            prev_sig = sig_series.iloc[i - 1]
+            # 金叉：DIF从下穿越DEA
+            if prev_macd <= prev_sig and macd_i > sig_i:
+                buy_count += 1.0
+            # 死叉：DIF从上穿越DEA
+            if prev_macd >= prev_sig and macd_i < sig_i:
+                sell_count += 1.0
         
-        # 3. KDJ
+        # ========== 2. RSI超卖/超买（对齐detect_trade_points） ==========
+        if not pd.isna(rsi_i):
+            if rsi_prev < 30 and rsi_i >= 30:
+                buy_count += 1.0
+            elif rsi_i < 20:
+                buy_count += 1.0
+            if rsi_prev > 70 and rsi_i <= 70:
+                sell_count += 1.0
+            elif rsi_i > 85:
+                sell_count += 1.0
+        
+        # ========== 3. KDJ极端值+金叉/死叉（对齐detect_trade_points） ==========
         j_i = j_series.iloc[i]
         k_i = k_series.iloc[i]
         d_i = d_series.iloc[i]
-        if not pd.isna(j_i):
-            if j_i < 0:
-                buy_score += 2
+        if not pd.isna(j_i) and i > 0:
+            prev_k = k_series.iloc[i - 1]
+            prev_d = d_series.iloc[i - 1]
+            kdj_golden = (prev_k < prev_d and k_i >= d_i)
+            kdj_death = (prev_k > prev_d and k_i <= d_i)
+            if j_i < 0 and kdj_golden:
+                buy_count += 1.0
+            elif j_i < 0:
+                buy_count += 0.5
+            if j_i > 100 and kdj_death:
+                sell_count += 1.0
             elif j_i > 100:
-                sell_score += 2
-            if k_i < 20 and d_i < 20:
-                buy_score += 1
-            elif k_i > 80 and d_i > 80:
-                sell_score += 1
+                sell_count += 0.5
         
-        # 4. Bollinger
-        current_i = closes.iloc[i]
-        lower_i = lower_series.iloc[i]
+        # ========== 4. 放量上涨/下跌（对齐detect_trade_points） ==========
+        vol_ratio_i = volumes.iloc[i] / vol_ma10.iloc[i] if not pd.isna(vol_ma10.iloc[i]) and vol_ma10.iloc[i] > 0 else 1
+        if vol_ratio_i > 1.2:
+            if is_green:
+                buy_count += 1.0
+            else:
+                sell_count += 1.0
+        
+        # ========== 5. 布林带反弹/回落（对齐detect_trade_points） ==========
         upper_i = upper_series.iloc[i]
-        if not pd.isna(lower_i):
-            if current_i < lower_i:
-                buy_score += 1
-            if current_i > upper_i:
-                sell_score += 1
+        lower_i = lower_series.iloc[i]
+        if not pd.isna(lower_i) and i > 0:
+            prev_low = lows.iloc[i - 1]
+            prev_high = highs.iloc[i - 1]
+            if prev_low <= lower_i and is_green:
+                buy_count += 1.0
+            elif curr_close <= lower_i * 1.01 and is_green:
+                buy_count += 0.5
+            if prev_high >= upper_i and not is_green:
+                sell_count += 1.0
+            elif curr_close >= upper_i * 0.99 and not is_green:
+                sell_count += 0.5
         
-        # 5. MA
+        # ========== 6. 均线回踩（对齐detect_trade_points） ==========
         ma5_i = ma5_series.iloc[i]
         ma10_i = ma10_series.iloc[i]
         ma20_i = ma20_series.iloc[i]
         ma50_i = ma50_series.iloc[i]
         if not pd.isna(ma5_i) and not pd.isna(ma10_i) and not pd.isna(ma20_i):
-            if current_i > ma5_i and ma5_i > ma10_i and ma10_i > ma20_i:
-                buy_score += 2
-            if current_i < ma5_i and ma5_i < ma10_i and ma10_i < ma20_i:
-                sell_score += 2
-        if not pd.isna(ma50_i):
-            if current_i > ma50_i and ma20_i > ma50_i:
-                buy_score += 2
-            elif current_i < ma50_i and ma20_i < ma50_i:
-                sell_score += 2
+            ma_bullish = curr_close > ma5_i and ma5_i > ma10_i and ma10_i > ma20_i
+            if ma_bullish and prev_close <= ma20_i and curr_close > ma20_i:
+                buy_count += 1.0
+            ma_bearish = curr_close < ma5_i and ma5_i < ma10_i and ma10_i < ma20_i
+            if ma_bearish and prev_close >= ma20_i and curr_close < ma20_i:
+                sell_count += 1.0
         
-        # 6. Volume
-        vol_ratio_i = volumes.iloc[i] / vol_ma10.iloc[i] if not pd.isna(vol_ma10.iloc[i]) and vol_ma10.iloc[i] > 0 else 1
-        if vol_ratio_i > 1.5:
-            if closes.iloc[i] > opens.iloc[i]:
-                buy_score += 2
-            else:
-                sell_score += 2
+        # ========== 7. ADX趋势强度（对齐detect_trade_points） ==========
+        try:
+            adx_d = calculate_adx(sub_data)
+            adx_trend = adx_d.get("trend", "ranging")
+            adx_val = adx_d.get("adx", 0)
+            adx_plus = adx_d.get("plus_di", 0)
+            adx_minus = adx_d.get("minus_di", 0)
+            if adx_trend == "strong_bull":
+                buy_count += 1.0
+            elif adx_trend == "strong_bear":
+                sell_count += 1.0
+            elif adx_trend == "weak_bull":
+                buy_count += 0.5
+            elif adx_trend == "weak_bear":
+                sell_count += 0.5
+        except Exception:
+            pass
         
-        net_score = buy_score - sell_score
+        # ========== 8. RSI背离（对齐detect_trade_points） ==========
+        try:
+            div_d = detect_rsi_divergence(sub_data)
+            div_type = div_d.get("type", "none")
+            if div_type == "bullish_divergence":
+                buy_count += 1.5
+            elif div_type == "bearish_divergence":
+                sell_count += 1.5
+        except Exception:
+            pass
         
-        # 只统计有明确方向信号的日子
-        if net_score >= 1:
+        # ========== 9. K线形态（对齐detect_trade_points） ==========
+        try:
+            cps = detect_candlestick_patterns(sub_data)
+            for cp in cps:
+                if cp["type"] == "bullish":
+                    buy_count += cp["score"] * 0.5
+                else:
+                    sell_count += abs(cp["score"]) * 0.5
+        except Exception:
+            pass
+        
+        # ========== 10. 成交量背离（对齐detect_trade_points） ==========
+        try:
+            # 使用近30日数据做量价背离检测
+            win_start = max(0, i - 29)
+            sub_closes = closes.iloc[win_start:i + 1]
+            sub_volumes = volumes.iloc[win_start:i + 1]
+            vds = detect_volume_divergence(sub_closes, sub_volumes)
+            for vd in vds:
+                if vd["type"] == "bullish":
+                    buy_count += vd["score"] * 0.5
+                else:
+                    sell_count += abs(vd["score"]) * 0.5
+        except Exception:
+            pass
+        
+        # ========== 信号判定（与detect_trade_points完全一致） ==========
+        if buy_count >= 2 and sell_count == 0:
             direction = "bull"
-        elif net_score <= -1:
+        elif buy_count >= 1.5 and buy_count > sell_count:
+            direction = "bull"
+        elif sell_count >= 2 and buy_count == 0:
+            direction = "bear"
+        elif sell_count >= 1.5 and sell_count > buy_count:
             direction = "bear"
         else:
-            continue
+            continue  # 中性日跳过
         
         # 5日后实际涨跌
         forward_return = closes.iloc[i + 5] - closes.iloc[i]
@@ -2213,14 +2284,14 @@ def compute_signal_accuracy(data):
     
     if total == 0:
         return {"accuracy": None, "testable_days": 0, "consistent_days": 0, 
-                "note": f"回测窗口{lookback}日中无明确信号触发"}
+                "note": f"回测窗口{min(60, n-6)}日中无明确信号触发"}
     
     accuracy = round(consistent / total * 100, 1)
     return {
         "accuracy": accuracy,
         "testable_days": total,
         "consistent_days": consistent,
-        "note": f"基于{lookback}日窗口，追踪实际买卖信号（|净分|>=1）与5日后走势一致率"
+        "note": f"基于10维完整信号回测（对齐detect_trade_points），有效信号日{total}天，5日方向一致率{accuracy}%"
     }
 
 
