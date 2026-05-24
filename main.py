@@ -19,8 +19,8 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.17.7（10维回测对齐+ATR止损+R:R+负面因素+股息率容错）",
-    version="5.17.7",
+    description="股票/加密货币分析API - V5.17.8（ADX过滤联动+趋势方向/信号原因/评分行对齐）",
+    version="5.17.8",
     servers=[{"url": "https://stock-analysis-api-n741.onrender.com", "description": "Render部署"}],
 )
 
@@ -2471,7 +2471,8 @@ def build_formatted_report(
     elif adx_trend == "weak_bear":
         adx_score = -8
     adx_label = {"strong_bull": "强势多头", "weak_bull": "偏多", "strong_bear": "强势空头", "weak_bear": "偏空", "ranging": "震荡"}.get(adx_trend, "震荡")
-    lines.append(f"  ADX趋势：{adx_score}分（ADX={adx}，{adx_label}，+DI={plus_di}/-DI={minus_di}）")
+    adx_note = "⚠️ADX<25=震荡市，综合信号已过滤" if adx_filtered else ""
+    lines.append(f"  ADX趋势：{adx_score}分（ADX={adx}，{adx_label}，+DI={plus_di}/-DI={minus_di}）{adx_note}")
     # MACD
     macd_score = 0
     if macd_cross == "golden":
@@ -2593,15 +2594,26 @@ def build_formatted_report(
     if mt_discount != 0:
         mt_notes.append(f"多周期{"+" if mt_discount > 0 else ""}{mt_discount}分")
     mt_note = f"（含{','.join(mt_notes)}调整）" if mt_notes else ""
-    lines.append(f"  总分：{int(total_score)} → {score_signal} {score_stars}{mt_note}")
+    # V5.17.8: ADX<25 时评分行标注"被ADX震荡市过滤"，避免与综合信号矛盾
+    score_line = f"  总分：{int(total_score)} → {score_signal} {score_stars}{mt_note}"
+    if adx_filtered:
+        score_line += f"⚠️（ADX={adx}<25，综合信号已过滤为震荡观望）"
+    lines.append(score_line)
     lines.append("=" * 40)
     lines.append("")
     lines.append("关键信号触发原因")
+    # V5.17.8: ADX<25 震荡市过滤时，压制 ADX 相关买入原因（趋势不明确不应说"偏多"）
     if buy_reasons_text:
         for r in buy_reasons_text.split("；"):
-            if r.strip():
-                star = "★★★" if ("强烈" in r or "金叉" in r) else "★★☆"
-                lines.append(f"  ✅ {r.strip()} {star}")
+            r = r.strip()
+            if not r:
+                continue
+            if adx_filtered and "ADX" in r:
+                continue  # ADX<25 趋势不明，不展示"ADX偏多"等
+            star = "★★★" if ("强烈" in r or "金叉" in r) else "★★☆"
+            lines.append(f"  ✅ {r} {star}")
+    if adx_filtered and not buy_reasons_text:
+        lines.append(f"  ✅ 无明显买入信号（ADX={adx}<25，震荡市谨慎操作）")
     if sell_reasons_text:
         for r in sell_reasons_text.split("；"):
             if r.strip():
@@ -2687,12 +2699,12 @@ def build_formatted_report(
     vol_cn = {"high_volume": "放量", "above_avg": "量能偏高", "low_volume": "缩量", "normal": "正常"}.get(volume_signal, "正常")
     lines.append(f"  • 成交量：{vol_cn}（比率{volume_ratio}x）")
     trend_cn = {"bullish": "偏多", "bearish": "偏空", "neutral": "震荡"}.get(trend_direction, "震荡")
-    # 与 signal 对齐：观望信号时趋势描述需保守
-    if signal.lower() in ("hold",):
+    # V5.17.8: 与过滤后的 signal_cn 对齐（ADX<25 震荡市等场景）
+    if "观望" in signal_cn:
         if trend_direction == "bullish":
-            trend_cn = "偏多（但信号观望，需确认）"
+            trend_cn = "偏多（"+("ADX<25 趋势不明" if adx_filtered else "但信号观望")+"，需确认）"
         elif trend_direction == "bearish":
-            trend_cn = "偏空（但信号观望，需确认）"
+            trend_cn = "偏空（"+("ADX<25 趋势不明" if adx_filtered else "但信号观望")+"，需确认）"
         else:
             trend_cn = "震荡（无明显方向）"
     lines.append(f"  • 趋势方向：{trend_cn}")
