@@ -2442,6 +2442,30 @@ def build_formatted_report(
             if r.strip():
                 star = "★★☆" if ("死叉" in r or "强烈" in r) else "★☆☆"
                 lines.append(f"  ❌ {r.strip()} {star}")
+    # 补充负面评分因素（避免只看到正面信号而忽略风险）
+    neg_factors = []
+    if macd_score <= -5:
+        neg_factors.append(f"MACD空头运行（{macd_score}分），短期承压")
+    if kdj_score <= -5:
+        neg_factors.append(f"KDJ死叉（{kdj_score}分），动能转弱")
+    if rsi_score < 0:
+        neg_factors.append(f"RSI走弱（{rsi_score}分），上行动能不足")
+    if adx_score < 0:
+        neg_factors.append(f"ADX空头趋势（{adx_score}分）")
+    if ma_score < 0:
+        neg_factors.append(f"均线空头排列（{ma_score}分）")
+    if vol_score < 0:
+        neg_factors.append(f"成交量异常（{vol_score}分）")
+    if boll_score < 0:
+        neg_factors.append(f"布林带压力（{boll_score}分）")
+    if div_score < 0:
+        neg_factors.append(f"RSI背离（{div_score}分），反转风险")
+    if cp_score < 0:
+        neg_factors.append(f"K线看空形态（{cp_score}分）")
+    if vd_score < 0:
+        neg_factors.append(f"量价背离（{vd_score}分），趋势不稳固")
+    for nf in neg_factors:
+        lines.append(f"  ⚠️ {nf}")
     lines.append("")
     # V5.14: 多周期一致性
     if weekly_trend and monthly_trend:
