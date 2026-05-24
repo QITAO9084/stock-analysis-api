@@ -2,9 +2,15 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    "version": "5.2.0"
+    "description": "股票/加密货币分析API - V5.12（全端预渲染：7个端点全部输出 formatted_report，Agent 只做管道转发）",
+    "version": "5.12.0"
   },
+  "servers": [
+    {
+      "url": "https://stock-analysis-api-n741.onrender.com",
+      "description": "Render"
+    }
+  ],
   "paths": {
     "/": {
       "get": {
@@ -513,6 +519,78 @@
         }
       }
     },
+    "/ganzhi": {
+      "get": {
+        "tags": [
+          "双色球玄学映射"
+        ],
+        "summary": "Ganzhi By Date",
+        "description": "干支五行号码映射接口（按日期查询，专为Coze插件优化）\n�3.0：新增六柱干支号码、九宫飞星、纳音五行、八卦方位、时辰分析、热度升级。\n\n- **date**: 公历日期（格式：YYYY-MM-DD）\n- **mode**: 旺行判定逻辑，可选：\n  - day_gan（默认）：日柱天干五行\n  - day_zhi：日柱地支五行\n  - majority：六柱综合众数\n- **hour_zhi**: 可选时辰地支（子/丑/寅/卯/辰/巳/午/未/申/酉/戌/亥），传入则输出时辰分析",
+        "operationId": "ganzhi_by_date_ganzhi_get",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "2026-05-22",
+              "title": "Date"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "day_gan",
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "hour_zhi",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Hour Zhi"
+            }
+          },
+          {
+            "name": "birthday",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Birthday"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ganzhi/map": {
       "get": {
         "tags": [
@@ -590,6 +668,224 @@
               "type": "integer",
               "default": 1,
               "title": "Lunar Day"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ssq/history": {
+      "get": {
+        "tags": [
+          "双色球历史数据"
+        ],
+        "summary": "Ssq History",
+        "description": "双色球历史开奖数据查询\n\n- **limit**: 返回最近N期数据，默认30，最大200",
+        "operationId": "ssq_history_ssq_history_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 30,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ssq/analysis": {
+      "get": {
+        "tags": [
+          "双色球历史数据"
+        ],
+        "summary": "Ssq Analysis",
+        "description": "双色球基础统计分析\n\n- **periods**: 分析最近N期数据，默认50，最大200\n\n返回：号码频率、遗漏值、冷热号、和值分布、奇偶比、大小比、区间分布",
+        "operationId": "ssq_analysis_ssq_analysis_get",
+        "parameters": [
+          {
+            "name": "periods",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Periods"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ssq/backtest": {
+      "get": {
+        "tags": [
+          "双色球历史数据"
+        ],
+        "summary": "Ssq Backtest",
+        "description": "双色球玄学维度回测验证\n\n对历史每期数据，用/ganzhi相同逻辑计算各维度号码，与实际开奖号码对比。\n- **periods**: 回测最近N期，默认200，最大2144\n- **mode**: 旺行判定逻辑，可选：\n  - day_gan（默认）：日柱天干五行\n  - day_zhi：日柱地支五行\n  - majority：六柱综合众数\n  - all：三种模式并行回测，对比结果并推荐最优\n\n返回每个维度在红球/蓝球中的命中率，与随机概率对比。\n当mode=\"all\"时，额外返回三种模式的对比结果和推荐。",
+        "operationId": "ssq_backtest_ssq_backtest_get",
+        "parameters": [
+          {
+            "name": "periods",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Periods"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "day_gan",
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "birthday",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Birthday"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ssq/pick": {
+      "get": {
+        "tags": [
+          "双色球历史数据"
+        ],
+        "summary": "Ssq Pick",
+        "description": "双色球融合选号接口（玄学+统计）\n\n基于回测验证的有效维度+历史统计，融合生成推荐号码组合。\n- **date**: 公历日期（YYYY-MM-DD），默认今天\n- **mode**: 旺行判定逻辑，可选：\n  - auto（默认）：自动推荐最优模式\n  - day_gan：日柱天干五行\n  - day_zhi：日柱地支五行\n  - majority：六柱综合众数\n- **count**: 生成几注，默认5，最大10\n\n选号逻辑：\n1. 玄学有效维度（六柱干支/生我行/纳音五行/飞星，日月已移除-负面）缩范围 → 红球候选池\n2. 历史统计（频率/遗漏/冷热）二次筛选 → 加权排序\n3. 约束条件（和值/奇偶/大小/区间）优化组合\n4. 蓝球独立选号（玄学蓝球+统计蓝球融合）",
+        "operationId": "ssq_pick_ssq_pick_get",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Date"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "auto",
+              "title": "Mode"
+            }
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 5,
+              "title": "Count"
+            }
+          },
+          {
+            "name": "birthday",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Birthday"
             }
           }
         ],
