@@ -3095,7 +3095,11 @@ def build_scan_report(
             stars = "★★★" if abs(s.get("score", 0)) >= 7 else "★☆☆"
             tp_cn_map = {"strong_sell": "强烈卖出", "sell": "建议卖出"}
             tp_cn = tp_cn_map.get(s.get("trade_point", ""), "建议卖出")
+            entry = f"{cs}{s.get('entry_price', '—')}" if s.get('entry_price') and s.get('entry_price') != 0 else "—"
+            stop = f"{cs}{s.get('stop_loss', '—')}" if s.get('stop_loss') and s.get('stop_loss') != 0 else "—"
+            take = f"{cs}{s.get('take_profit', '—')}" if s.get('take_profit') and s.get('take_profit') != 0 else "—"
             lines.append(f"{i}. {s.get('symbol', '?')} — {tp_cn} {stars} — 评分{s.get('score', 0):+}")
+            lines.append(f"   出场{entry} / 反弹止损{stop} / 止盈{take}")
             reasons = s.get("sell_reasons_text", "")
             if reasons:
                 reason_list = [r.strip() for r in reasons.split("；") if r.strip()]
