@@ -29,15 +29,17 @@ app.add_middleware(
 # ===== V5.12.1 Coze URL 修正中间件 =====
 # 根因：Coze 忽略 OpenAPI servers 字段，直接用 spec URL 拼接工具路径
 # 结果：/openapi.json/stock/analyze2 而非 /stock/analyze2 → 404
-# 解决：自动剥离 /openapi.json 前缀
+# 解决：直接修改 scope["path"] 绕过请求重建问题
+from starlette.types import Scope
 @app.middleware("http")
 async def coze_url_fix_middleware(request: Request, call_next):
-    path = request.url.path
+    path = request.scope.get("path", "")
     if path.startswith("/openapi.json/"):
-        # 重写路径：去掉 /openapi.json 前缀
-        scope = dict(request.scope)
-        scope["path"] = path.replace("/openapi.json", "", 1)
-        request = Request(scope, request.receive)
+        new_path = path.replace("/openapi.json", "", 1)
+        request.scope["path"] = new_path
+        # 同步 raw_path（若存在）
+        if "raw_path" in request.scope:
+            request.scope["raw_path"] = new_path.encode("latin-1")
     response = await call_next(request)
     return response
 
