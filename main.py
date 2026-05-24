@@ -581,10 +581,10 @@ def get_stock_info(symbol: str = "AAPL", market: str = "us"):
     # 处理Coze可能传入的"auto"参数
     if symbol == "auto" or not symbol:
         symbol = "AAPL"
-    if market == "auto" or not market:
-        market = "us"
+    # auto 模式：保留 auto 传给 normalize_stock_symbol 自动检测
+    detect_market = market if market else "us"
 
-    symbol, market = normalize_stock_symbol(symbol, market)
+    symbol, market = normalize_stock_symbol(symbol, detect_market)
 
     try:
         info, _ = fetch_yf_data(symbol, period="1d")
@@ -616,10 +616,10 @@ def get_kline_data(symbol: str = "AAPL", market: str = "us", period: str = "1mo"
     # 处理Coze可能传入的"auto"参数
     if symbol == "auto" or not symbol:
         symbol = "AAPL"
-    if market == "auto" or not market:
-        market = "us"
+    # auto 模式：保留 auto 传给 normalize_stock_symbol 自动检测
+    detect_market = market if market else "us"
 
-    symbol, market = normalize_stock_symbol(symbol, market)
+    symbol, market = normalize_stock_symbol(symbol, detect_market)
 
     try:
         _, data = fetch_yf_data(symbol, period=period)
@@ -657,10 +657,10 @@ def get_trading_signal_api(symbol: str = "AAPL", market: str = "us"):
     # 处理Coze可能传入的"auto"参数
     if symbol == "auto" or not symbol:
         symbol = "AAPL"
-    if market == "auto" or not market:
-        market = "us"
+    # auto 模式：保留 auto 传给 normalize_stock_symbol 自动检测
+    detect_market = market if market else "us"
 
-    symbol, market = normalize_stock_symbol(symbol, market)
+    symbol, market = normalize_stock_symbol(symbol, detect_market)
 
     try:
         _, data = fetch_yf_data(symbol, period="3mo")
@@ -686,10 +686,10 @@ def analyze_stock(symbol: str = "AAPL", market: str = "us"):
     # 处理Coze可能传入的"auto"参数
     if symbol == "auto" or not symbol:
         symbol = "AAPL"
-    if market == "auto" or not market:
-        market = "us"
+    # auto 模式：保留 auto 传给 normalize_stock_symbol 自动检测
+    detect_market = market if market else "us"
 
-    symbol, market = normalize_stock_symbol(symbol, market)
+    symbol, market = normalize_stock_symbol(symbol, detect_market)
 
     try:
         # 获取股票信息 + 历史数据（带缓存和重试）
@@ -762,10 +762,10 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
     """
     if symbol == "auto" or not symbol:
         symbol = "AAPL"
-    if market == "auto" or not market:
-        market = "us"
+    # auto 模式：保留 auto 传给 normalize_stock_symbol 自动检测
+    detect_market = market if market else "us"
 
-    symbol, market = normalize_stock_symbol(symbol, market)
+    symbol, market = normalize_stock_symbol(symbol, detect_market)
 
     try:
         info, data = fetch_yf_data(symbol)
@@ -1251,6 +1251,8 @@ def detect_trade_points(data, symbol):
     kdj_data = calculate_kdj(data)
     boll = calculate_bollinger_bands(data)
     vol_status, vol_ratio = calculate_volume_signal(data)
+    adx_data = calculate_adx(data)                      # V5.9: ADX趋势强度
+    divergence_data = detect_rsi_divergence(data)        # V5.9: RSI背离检测
 
     ma5 = data['Close'].rolling(window=5).mean().iloc[-1]
     ma10 = data['Close'].rolling(window=10).mean().iloc[-1]
@@ -1359,6 +1361,37 @@ def detect_trade_points(data, symbol):
         sell_reasons.append(f"空头趋势反弹至MA20（{round(ma20,2)}）后继续下跌")
         sell_count += 1
 
+    # ========== V5.9: ADX趋势强度 ==========
+    # 7. ADX趋势方向（强趋势下顺趋势操作加分）
+    adx_trend = adx_data.get("trend", "ranging")
+    adx_val = adx_data.get("adx", 0)
+    plus_di = adx_data.get("plus_di", 0)
+    minus_di = adx_data.get("minus_di", 0)
+    if adx_trend == "strong_bull":
+        buy_reasons.append(f"ADX强势多头（ADX={round(adx_val,1)}，+DI={round(plus_di,1)}>-DI={round(minus_di,1)}），趋势确立")
+        buy_count += 1
+    elif adx_trend == "strong_bear":
+        sell_reasons.append(f"ADX强势空头（ADX={round(adx_val,1)}，-DI={round(minus_di,1)}>+DI={round(plus_di,1)}），趋势确立")
+        sell_count += 1
+    elif adx_trend == "weak_bull":
+        buy_reasons.append(f"ADX偏多（ADX={round(adx_val,1)}），趋势正在形成")
+        buy_count += 0.5
+    elif adx_trend == "weak_bear":
+        sell_reasons.append(f"ADX偏空（ADX={round(adx_val,1)}），趋势正在形成")
+        sell_count += 0.5
+    # ranging (ADX<20)：震荡市不加减分，但在综合判断中降低信号可靠性
+
+    # ========== V5.9: RSI背离检测 ==========
+    # 8. RSI背离（最高优先级反转信号，权重 1.5 分）
+    div_type = divergence_data.get("type", "none")
+    div_desc = divergence_data.get("description", "")
+    if div_type == "bullish_divergence":
+        buy_reasons.append(f"RSI底背离：{div_desc}")
+        buy_count += 1.5
+    elif div_type == "bearish_divergence":
+        sell_reasons.append(f"RSI顶背离：{div_desc}")
+        sell_count += 1.5
+
     # ========== 综合判断 ==========
 
     # 评分：买入+卖出互相抵消
@@ -1403,6 +1436,12 @@ def detect_trade_points(data, symbol):
         "stop_loss": stop_loss,
         "take_profit": take_profit,
         "score": score,
+        "adx": round(adx_val, 2),                   # V5.9: ADX数值
+        "adx_trend": adx_trend,                      # V5.9: ADX趋势类型
+        "plus_di": round(plus_di, 2),                # V5.9: +DI
+        "minus_di": round(minus_di, 2),              # V5.9: -DI
+        "rsi_divergence_type": div_type,             # V5.9: RSI背离类型
+        "rsi_divergence_desc": div_desc,             # V5.9: RSI背离描述
     }
 
 
@@ -1412,7 +1451,8 @@ def normalize_stock_symbol(symbol: str, market: str = "us") -> tuple:
 
     - 港股(hk)：纯数字代码自动补 .HK（如 0700 → 0700.HK, 00700 → 00700.HK）
     - 美股(us)：不做处理（yfinance 直接支持）
-    - A股(cn)：补 .SS（上交所）或 .SZ（深交所），暂不自动区分
+    - A股(cn)：补 .SS（上交所）或 .SZ（深交所）
+    - auto：根据代码特征自动检测市场（纯数字3-5位→港股，6位纯数字→A股，其余→美股）
     - 已有后缀的代码直接返回
 
     returns: (normalized_symbol, detected_market)
@@ -1423,6 +1463,22 @@ def normalize_stock_symbol(symbol: str, market: str = "us") -> tuple:
     if sym.endswith(".HK") or sym.endswith(".SS") or sym.endswith(".SZ"):
         detected = "hk" if sym.endswith(".HK") else "cn"
         return sym, detected
+
+    # auto 模式：根据代码特征自动检测市场
+    if market.lower() == "auto":
+        # 港股：纯数字 3-5 位
+        if sym.isdigit() and 3 <= len(sym) <= 5:
+            return f"{sym}.HK", "hk"
+        # A股：6位纯数字，6开头→上交所(.SS)，0/3开头→深交所(.SZ)
+        if sym.isdigit() and len(sym) == 6:
+            if sym.startswith("6"):
+                return f"{sym}.SS", "cn"
+            elif sym.startswith("0") or sym.startswith("3"):
+                return f"{sym}.SZ", "cn"
+            else:
+                return sym, "cn"  # 其他6位数字（如科创板688xxx）
+        # 其余→美股（纯字母代码）
+        return sym, "us"
 
     # 港股：纯数字（3-5位）→ 补 .HK
     if market.lower() == "hk" or (sym.isdigit() and 3 <= len(sym) <= 5):
@@ -1464,14 +1520,14 @@ def scan_stocks(
     - **market**: 市场（us/hk/cn）
     - **min_score**: 最低信号分数（默认3.0，只返回评分≥此值的标的）
     """
-    if market == "auto" or not market:
-        market = "us"
+    # auto 模式：保留 auto 传给 normalize_stock_symbol 逐股检测，不提前转换
+    detect_market = market.lower() if market else "us"
 
     # 如果没传 symbols，使用默认列表
     if not symbols or symbols.strip() == "":
-        if market.lower() == "hk":
+        if detect_market == "hk":
             symbols = DEFAULT_HK_SCAN
-        elif market.lower() == "cn":
+        elif detect_market == "cn":
             symbols = DEFAULT_CN_SCAN
         else:
             symbols = DEFAULT_US_SCAN
@@ -1481,8 +1537,8 @@ def scan_stocks(
         if len(symbol_list) > 20:
             symbol_list = symbol_list[:20]
 
-        # 标准化股票代码
-        normalized = [normalize_stock_symbol(s, market) for s in symbol_list]
+        # 标准化股票代码（auto 模式下逐股自动检测市场）
+        normalized = [normalize_stock_symbol(s, detect_market) for s in symbol_list]
 
         results = []
         failed_count = 0
@@ -1580,10 +1636,10 @@ def get_trade_point_flat(symbol: str = "AAPL", market: str = "us"):
     """
     if symbol == "auto" or not symbol:
         symbol = "AAPL"
-    if market == "auto" or not market:
-        market = "us"
+    # auto 模式：保留 auto 传给 normalize_stock_symbol 自动检测
+    detect_market = market if market else "us"
 
-    symbol, market = normalize_stock_symbol(symbol, market)
+    symbol, market = normalize_stock_symbol(symbol, detect_market)
 
     try:
         info, data = fetch_yf_data(symbol)
