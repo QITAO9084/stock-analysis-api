@@ -3873,44 +3873,109 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
     hot_cold_red = _hot_cold_cycle(stat_data, "red", window=10)
     hot_cold_blue = _hot_cold_cycle(stat_data, "blue", window=10)
 
-    # ===== 第三步：融合评分（v4.1: +冷热周期+交叉验证）=====
-    # v3.5: 冷门号保底分（玄学0分的号码给0.5基础分，避免完全排除）
-    _COLD_FLOOR = 0.5
+    # ===== 第三步：v5.0 贝叶斯融合评分（P17）=====
+    # 核心公式：P(hi|d) ∝ P(d|hi) × P(hi)
+    #   P(hi) = 玄学先验（基于回测有效维度的信念概率）
+    #   P(d|hi) = 统计似然（基于4大统计引擎的观测概率）
+    #   P(hi|d) = 后验概率（最终推荐得分）
 
-    # v4.1 P7: 玄学统计交叉验证
-    # 玄学TOP9（前1/3）和统计TOP9重合的号码，给额外交叉加权
+    import math
+
+    # --- P(hi): 玄学先验概率 ---
+    # 将玄学得分转换为概率分布（Softmax归一化）
+    # 温度参数：T越低→高得分号码概率越集中，T越高→分布越均匀
+    _PRIOR_TEMP = 2.0  # 先验温度（玄学信念的集中度）
+
+    # 红球先验
+    _prior_red_raw = {}
+    for n in range(1, 34):
+        x = xuanxue_red_score.get(n, 0)
+        _prior_red_raw[n] = math.exp(x / _PRIOR_TEMP)
+    _prior_red_sum = sum(_prior_red_raw.values())
+    prior_red = {n: v / _prior_red_sum for n, v in _prior_red_raw.items()}
+
+    # 蓝球先验
+    _prior_blue_raw = {}
+    for n in range(1, 17):
+        x = xuanxue_blue_score.get(n, 0)
+        _prior_blue_raw[n] = math.exp(x / _PRIOR_TEMP)
+    _prior_blue_sum = sum(_prior_blue_raw.values())
+    prior_blue = {n: v / _prior_blue_sum for n, v in _prior_blue_raw.items()}
+
+    # --- P(d|hi): 统计似然概率 ---
+    # 将统计得分转换为似然函数（Softmax归一化）
+    _LIKELIHOOD_TEMP = 1.5  # 似然温度（统计信号的集中度，更低=更集中）
+
+    # 红球似然
+    _like_red_raw = {}
+    for n in range(1, 34):
+        s = stat_red_score.get(n, 0)
+        _like_red_raw[n] = math.exp(s / _LIKELIHOOD_TEMP)
+    _like_red_sum = sum(_like_red_raw.values())
+    likelihood_red = {n: v / _like_red_sum for n, v in _like_red_raw.items()}
+
+    # 蓝球似然
+    _like_blue_raw = {}
+    for n in range(1, 17):
+        s = stat_blue_score.get(n, 0)
+        _like_blue_raw[n] = math.exp(s / _LIKELIHOOD_TEMP)
+    _like_blue_sum = sum(_like_blue_raw.values())
+    likelihood_blue = {n: v / _like_blue_sum for n, v in _like_blue_raw.items()}
+
+    # --- P(hi|d): 后验概率 = 先验 × 似然 ---
+    # 贝叶斯融合：后验 ∝ P(hi) × P(d|hi)
+    # 用对数空间避免下溢：log P(hi|d) = log P(hi) + log P(d|hi) + const
+    _COLD_FLOOR = 0.3  # 冷门号保底分（贝叶斯框架下缩小，避免0概率）
+
+    # v4.1 P7: 玄学统计交叉验证（贝叶斯版：先验和似然一致的号码获得额外置信度）
     xuanxue_top9 = set(sorted(xuanxue_red_score, key=xuanxue_red_score.get, reverse=True)[:9])
     stat_top9 = set(sorted(stat_red_score, key=stat_red_score.get, reverse=True)[:9])
-    cross_red = xuanxue_top9 & stat_top9  # 交集号码
+    cross_red = xuanxue_top9 & stat_top9
 
     xuanxue_blue_top3 = set(sorted(xuanxue_blue_score, key=xuanxue_blue_score.get, reverse=True)[:3])
     stat_blue_top3 = set(sorted(stat_blue_score, key=stat_blue_score.get, reverse=True)[:3])
     cross_blue = xuanxue_blue_top3 & stat_blue_top3
 
-    _CROSS_BONUS = 1.5  # 交叉验证额外加分
+    _CROSS_BONUS = 0.3  # 贝叶斯版交叉加分（作为先验-似然一致的额外置信度）
 
-    final_red_score = {}
-    cross_red_marks = {}  # 记录交叉验证标记
+    # 红球后验
+    log_posterior_red = {}
     for n in range(1, 34):
-        x_score = xuanxue_red_score.get(n, 0)
-        s_score = stat_red_score.get(n, 0) * 5  # 统计分归一化到0-5
-        # 冷门号保底：玄学得分为0但有统计数据的号码，给基础分
-        floor = _COLD_FLOOR if x_score == 0 and s_score > 0 else 0
+        log_prior = math.log(max(prior_red[n], 1e-10))
+        log_likelihood = math.log(max(likelihood_red[n], 1e-10))
         # P4: 冷热周期加分
-        hc_score = hot_cold_red[n]["score"] * 1.0  # 冷热周期0-1分，加权1.0
-        # P7: 交叉验证加分
+        hc_score = hot_cold_red[n]["score"] * 1.0
+        # P7: 交叉验证（先验-似然一致→额外置信度）
         cross = _CROSS_BONUS if n in cross_red else 0
-        cross_red_marks[n] = "🔥交叉" if n in cross_red else ""
-        final_red_score[n] = x_score + s_score + floor + hc_score + cross
+        # 冷门号保底
+        floor = _COLD_FLOOR if xuanxue_red_score.get(n, 0) == 0 and stat_red_score.get(n, 0) > 0 else 0
+        # 后验 = log先验 + log似然 + 冷热周期 + 交叉 + 保底
+        log_posterior_red[n] = log_prior + log_likelihood + hc_score + cross + floor
 
-    final_blue_score = {}
+    # 蓝球后验
+    log_posterior_blue = {}
     for n in range(1, 17):
-        x_score = xuanxue_blue_score.get(n, 0)
-        s_score = stat_blue_score.get(n, 0) * 5
-        floor = _COLD_FLOOR if x_score == 0 and s_score > 0 else 0
+        log_prior = math.log(max(prior_blue[n], 1e-10))
+        log_likelihood = math.log(max(likelihood_blue[n], 1e-10))
         hc_score = hot_cold_blue[n]["score"] * 1.0
         cross = _CROSS_BONUS if n in cross_blue else 0
-        final_blue_score[n] = x_score + s_score + floor + hc_score + cross
+        floor = _COLD_FLOOR if xuanxue_blue_score.get(n, 0) == 0 and stat_blue_score.get(n, 0) > 0 else 0
+        log_posterior_blue[n] = log_prior + log_likelihood + hc_score + cross + floor
+
+    # 归一化后验概率（用于展示）
+    _post_red_max = max(log_posterior_red.values())
+    posterior_red = {n: math.exp(v - _post_red_max) for n, v in log_posterior_red.items()}
+    _post_red_sum = sum(posterior_red.values())
+    posterior_red = {n: v / _post_red_sum for n, v in posterior_red.items()}
+
+    _post_blue_max = max(log_posterior_blue.values())
+    posterior_blue = {n: math.exp(v - _post_blue_max) for n, v in log_posterior_blue.items()}
+    _post_blue_sum = sum(posterior_blue.values())
+    posterior_blue = {n: v / _post_blue_sum for n, v in posterior_blue.items()}
+
+    # 用后验概率作为最终得分（乘以100便于展示和排序）
+    final_red_score = {n: round(posterior_red[n] * 100, 1) for n in range(1, 34)}
+    final_blue_score = {n: round(posterior_blue[n] * 100, 1) for n in range(1, 17)}
 
     # 红球排序
     sorted_red = sorted(final_red_score.items(), key=lambda x: (-x[1], x[0]))
@@ -4043,12 +4108,13 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
     if auto_reason:
         lines.append(f"💡 {auto_reason}")
     lines.append(f"玄学有效维度权重（自适应·{mode}模式）：{_weight_str}")
-    lines.append(f"统计引擎v4.1自适应权重：{_stat_weight_str}")
+    lines.append(f"统计引擎v5.0自适应权重：{_stat_weight_str}")
     _blue_weight_str = " / ".join(f"{k}×{v}" for k,v in _weights_blue.items() if v > 0)
     if _blue_weight_str != _weight_str:
         lines.append(f"蓝球独立权重：{_blue_weight_str}")
     if birth_weight_str:
         lines.append(f"🎂出生维度权重：{birth_weight_str}")
+    lines.append(f"🔮贝叶斯融合：先验P(hi)·玄学Softmax(T={_PRIOR_TEMP}) + 似然P(d|hi)·统计Softmax(T={_LIKELIHOOD_TEMP}) → 后验P(hi|d)")
 
     # v4.1 冷热周期摘要
     cold_to_warm = sorted([n for n in range(1,34) if hot_cold_red[n]["turn"] == "冷→温↑"])
@@ -4065,7 +4131,7 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
     # 红球TOP18带交叉标记
     red_pool_marks = []
     for n in red_pool:
-        mark = cross_red_marks.get(n, "")
+        mark = "🔥交叉" if n in cross_red else ""
         red_pool_marks.append(f"{n:02d}({final_red_score[n]:.1f}){mark}")
     lines.append(f"红球候选TOP18：{', '.join(red_pool_marks)}")
     blue_pool_marks = []
