@@ -3692,10 +3692,10 @@ async def ssq_adversarial(mode: str = "day_zhi", birthday: str = ""):
     formatted_adversarial = "\n".join(lines)
 
     return {
-        "train_periods": len(train_data),
-        "test_periods": len(test_data),
+        "train_periods": str(len(train_data)),
+        "test_periods": str(len(test_data)),
         "mode": mode,
-        "comparison": comparison,
+        "comparison": json.dumps(comparison, ensure_ascii=False),
         "formatted_adversarial": formatted_adversarial,
     }
 
