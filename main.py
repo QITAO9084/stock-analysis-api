@@ -5086,6 +5086,38 @@ async def ssq_analysis(periods: int = 50):
         f"🔄 重号平均：{avg_repeat}个/期，分布：{'  '.join([f'{k}个({v}期)' for k, v in sorted(repeat_detail.items()) if v > 0])}"
     )
 
+    # ===== v4.0 新增：马尔可夫预测 + 衰减记忆 + 关联规则 =====
+    # 马尔可夫链预测（基于近periods期转移矩阵）
+    markov_trans_red = _markov_transition(data, "red")
+    markov_trans_blue = _markov_transition(data, "blue")
+    last_red = data[0]["red"]
+    last_blue = [data[0]["blue"]]
+    markov_pred_red = _markov_predict(markov_trans_red, last_red, "red")
+    markov_pred_blue = _markov_predict(markov_trans_blue, last_blue, "blue")
+
+    markov_red_top5 = sorted(markov_pred_red.items(), key=lambda x: -x[1])[:5]
+    markov_blue_top3 = sorted(markov_pred_blue.items(), key=lambda x: -x[1])[:3]
+
+    # 衰减记忆频率
+    decay_freq_red = _decay_weighted_stats(data, "red", 0.95)
+    decay_freq_blue = _decay_weighted_stats(data, "blue", 0.95)
+    decay_red_top5 = sorted(decay_freq_red.items(), key=lambda x: -x[1])[:5]
+    decay_blue_top3 = sorted(decay_freq_blue.items(), key=lambda x: -x[1])[:3]
+
+    # 关联规则
+    assoc_rules_red = _association_rules(data, "red", min_support=0.03, min_confidence=0.12)
+    assoc_rules_blue = _association_rules(data, "blue", min_support=0.02, min_confidence=0.08)
+
+    formatted_analysis += (
+        f"\n\n【v4.0 统计引擎升级】\n\n"
+        f"🔮 马尔可夫预测红球TOP5：{'  '.join([f'{n:02d}({s:.1%})' for n,s in markov_red_top5])}\n"
+        f"🔮 马尔可夫预测蓝球TOP3：{'  '.join([f'{n:02d}({s:.1%})' for n,s in markov_blue_top3])}\n\n"
+        f"📉 衰减频率红球TOP5：{'  '.join([f'{n:02d}({s:.2f})' for n,s in decay_red_top5])}\n"
+        f"📉 衰减频率蓝球TOP3：{'  '.join([f'{n:02d}({s:.2f})' for n,s in decay_blue_top3])}\n\n"
+        f"🔗 关联规则(红球)：{len(assoc_rules_red)}条有效规则，TOP3：{'  '.join([f'{a}→{b}({c:.0%})' for a,b,c,_,_ in assoc_rules_red[:3]])}\n"
+        f"🔗 关联规则(蓝球)：{len(assoc_rules_blue)}条有效规则，TOP3：{'  '.join([f'红{a}→蓝{b}({c:.0%})' for a,b,c,_,_ in assoc_rules_blue[:3]])}"
+    )
+
     return {
         "periods_analyzed": periods,
         "date_range": f"{data[-1]['date']} ~ {data[0]['date']}" if data else "",
@@ -5100,6 +5132,259 @@ async def ssq_analysis(periods: int = 50):
         "consecutive_ratio": cons_ratio,
         "avg_repeat": avg_repeat,
     }
+
+
+# ===== v4.0 统计引擎升级：马尔可夫链 + 衰减记忆 + 关联规则 =====
+
+def _markov_transition(data, ball_type="red"):
+    """
+    P1: 一阶马尔可夫链转移矩阵
+
+    统计历史开奖中「当前期出i → 下期出j」的转移概率。
+    返回: {i: {j: probability}} 归一化转移概率矩阵
+
+    ball_type: "red" 红球(1-33) / "blue" 蓝球(1-16)
+    data: 历史开奖列表（最新期在前）
+    """
+    if ball_type == "red":
+        nums = range(1, 34)
+    else:
+        nums = range(1, 17)
+
+    # 统计转移计数：data是最新期在前，data[i+1]是前一期的下一期（更早）
+    # 所以 data[i] → data[i+1] 表示"从新一期到更早一期"，但我们关心的是"从上一期预测下一期"
+    # 正确方向：data[i+1](更早) → data[i](更新)，即 prev→current
+    trans_count = {i: {j: 0 for j in nums} for i in nums}
+    trans_total = {i: 0 for i in nums}
+
+    for idx in range(len(data) - 1):
+        prev_rec = data[idx + 1]  # 更早的一期（上一期）
+        curr_rec = data[idx]      # 更新的一期（下一期）
+
+        if ball_type == "red":
+            prev_balls = prev_rec["red"]
+            curr_balls = curr_rec["red"]
+        else:
+            prev_balls = [prev_rec["blue"]]
+            curr_balls = [curr_rec["blue"]]
+
+        for p in prev_balls:
+            trans_total[p] += 1
+            for c in curr_balls:
+                trans_count[p][c] += 1
+
+    # 归一化为概率
+    trans_prob = {}
+    for i in nums:
+        total = trans_total[i]
+        if total > 0:
+            trans_prob[i] = {j: trans_count[i][j] / total for j in nums}
+        else:
+            trans_prob[i] = {j: 1.0 / len(list(nums)) for j in nums}
+
+    return trans_prob
+
+
+def _markov_predict(trans_prob, last_numbers, ball_type="red"):
+    """
+    基于马尔可夫转移矩阵预测下期各号码出现概率。
+
+    last_numbers: 上一期开出的号码列表
+    返回: {num: probability} 各号码的预测概率
+    """
+    if ball_type == "red":
+        nums = range(1, 34)
+    else:
+        nums = range(1, 17)
+
+    # 对于每个候选号码，累加从上一期各号码转移过来的概率
+    scores = {n: 0.0 for n in nums}
+    for prev in last_numbers:
+        if prev in trans_prob:
+            for n in nums:
+                scores[n] += trans_prob[prev].get(n, 0)
+
+    # 归一化
+    total = sum(scores.values())
+    if total > 0:
+        scores = {n: s / total for n, s in scores.items()}
+
+    return scores
+
+
+def _decay_weighted_stats(data, ball_type="red", decay=0.95):
+    """
+    P2: 衰减记忆加权统计
+
+    近期数据权重更高（指数衰减），远期数据权重递减。
+    替代当前等权统计（频率60%+遗漏40%）。
+
+    decay: 衰减系数，0.95表示每期权重乘0.95
+    data: 历史开奖列表（最新期在前，index0=最新）
+    返回: {num: weighted_score} 归一化到0-1的衰减加权分
+    """
+    if ball_type == "red":
+        nums = range(1, 34)
+    else:
+        nums = range(1, 17)
+
+    weighted_freq = {n: 0.0 for n in nums}
+    # data[0]最新 → 权重1.0（decay^0），data[1] → decay^1, ...
+    for idx, rec in enumerate(data):
+        w = decay ** idx  # 指数衰减
+        if ball_type == "red":
+            for n in rec["red"]:
+                weighted_freq[n] += w
+        else:
+            weighted_freq[rec["blue"]] += w
+
+    # 归一化到0-1
+    max_w = max(weighted_freq.values()) if weighted_freq.values() else 1
+    if max_w == 0:
+        max_w = 1
+    scores = {n: weighted_freq[n] / max_w for n in nums}
+
+    return scores
+
+
+def _decay_miss_with_weight(data, ball_type="red", decay=0.95):
+    """
+    P2补充: 衰减遗漏值 - 越久没出且权重高 → 越应该出
+
+    与传统遗漏不同，这里加入衰减因子：近期遗漏权重更高。
+    返回: {num: weighted_miss_score} 归一化到0-1
+    """
+    if ball_type == "red":
+        nums = range(1, 34)
+    else:
+        nums = range(1, 17)
+
+    miss_score = {n: 0.0 for n in nums}
+
+    for n in nums:
+        # 找到该号码最近一次出现的位置
+        for idx, rec in enumerate(data):
+            if ball_type == "red" and n in rec["red"]:
+                # 出现了，遗漏期数=idx，权重=decay^idx
+                miss_score[n] = decay ** idx
+                break
+            elif ball_type == "blue" and rec["blue"] == n:
+                miss_score[n] = decay ** idx
+                break
+        else:
+            # 全部都没出现，给最低分
+            miss_score[n] = 0.0
+
+    # 反转：遗漏越久（miss_score越低）→ 补回概率越高
+    # 但衰减遗漏的逻辑是：已经很久没出的号码，如果近期权重高说明"该出了"
+    # 实际上miss_score=decay^idx，idx=遗漏期数，遗漏越久miss_score越低
+    # 我们要的是"遗漏越久越可能出"，所以反转
+    inverted = {n: 1.0 - miss_score[n] for n in nums}
+
+    # 归一化
+    max_inv = max(inverted.values()) if inverted.values() else 1
+    if max_inv == 0:
+        max_inv = 1
+    scores = {n: inverted[n] / max_inv for n in nums}
+
+    return scores
+
+
+def _association_rules(data, ball_type="red", min_support=0.03, min_confidence=0.12):
+    """
+    P3: 关联规则挖掘（Apriori简化版）
+
+    挖掘号码共现模式：如果出A则大概率出B。
+    对于红球：挖掘"如果本期出A则下期出B"的转移关联规则
+    对于蓝球：挖掘"如果本期红球出A则下期蓝球出B"的跨维度规则
+
+    min_support: 最小支持度（规则在所有期中出现的最低比例）
+    min_confidence: 最小置信度（P(B|A)的最低值）
+    返回: [(antecedent, consequent, confidence, support)] 排序后的规则列表
+    """
+    rules = []
+
+    if ball_type == "red":
+        # 红球→红球转移关联：本期出A → 下期出B
+        pair_count = {}  # {(a, b): count}
+        a_count = {}     # {a: count} 前件出现次数
+
+        for idx in range(len(data) - 1):
+            curr_red = data[idx]["red"]  # 当前期
+            prev_red = data[idx + 1]["red"]  # 上一期（更早）
+
+            for a in prev_red:
+                a_count[a] = a_count.get(a, 0) + 1
+                for b in curr_red:
+                    key = (a, b)
+                    pair_count[key] = pair_count.get(key, 0) + 1
+
+        total_periods = len(data) - 1
+
+        for (a, b), cnt in pair_count.items():
+            support = cnt / total_periods
+            confidence = cnt / a_count[a] if a_count[a] > 0 else 0
+            # 过滤：支持度>min_support 且 置信度>min_confidence 且 高于随机概率
+            random_prob = 6 / 33  # 红球随机概率≈18.18%
+            if support >= min_support and confidence >= min_confidence and confidence > random_prob:
+                lift = confidence / random_prob  # 提升度
+                rules.append((a, b, round(confidence, 4), round(support, 4), round(lift, 4)))
+
+    elif ball_type == "blue":
+        # 红球→蓝球转移关联：本期红球出A → 下期蓝球出B
+        pair_count = {}
+        a_count = {}
+
+        for idx in range(len(data) - 1):
+            curr_blue = data[idx]["blue"]
+            prev_red = data[idx + 1]["red"]
+
+            for a in prev_red:
+                a_count[a] = a_count.get(a, 0) + 1
+                key = (a, curr_blue)
+                pair_count[key] = pair_count.get(key, 0) + 1
+
+        total_periods = len(data) - 1
+
+        for (a, b), cnt in pair_count.items():
+            support = cnt / total_periods
+            confidence = cnt / a_count[a] if a_count[a] > 0 else 0
+            random_prob = 1 / 16  # 蓝球随机概率≈6.25%
+            if support >= min_support and confidence >= min_confidence and confidence > random_prob:
+                lift = confidence / random_prob
+                rules.append((a, b, round(confidence, 4), round(support, 4), round(lift, 4)))
+
+    # 按置信度降序排列
+    rules.sort(key=lambda x: (-x[2], -x[3]))
+    return rules
+
+
+def _association_predict(rules, last_numbers, ball_type="red"):
+    """
+    基于关联规则预测下期各号码得分。
+
+    last_numbers: 上一期开出的号码列表（红球或蓝球）
+    返回: {num: score} 归一化到0-1的关联规则预测分
+    """
+    if ball_type == "red":
+        nums = range(1, 34)
+    else:
+        nums = range(1, 17)
+
+    scores = {n: 0.0 for n in nums}
+
+    for rule in rules:
+        antecedent, consequent, confidence, support, lift = rule
+        if antecedent in last_numbers:
+            scores[consequent] += confidence * lift  # 置信度×提升度作为权重
+
+    # 归一化到0-1
+    max_s = max(scores.values()) if scores.values() else 1
+    if max_s == 0:
+        max_s = 1
+    scores = {n: s / max_s for n, s in scores.items()}
+
+    return scores
 
 
 @ app.get("/ssq/backtest", tags=["双色球历史数据"])
@@ -5711,50 +5996,58 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
         except:
             pass  # birthday参数错误时静默忽略，不影响主流程
 
-    # ===== 第二步：历史统计加权 =====
-    stat_periods = min(50, len(_SSQ_HISTORY))
+    # ===== 第二步：v4.0统计引擎升级（马尔可夫+衰减+关联规则）=====
+    stat_periods = min(100, len(_SSQ_HISTORY))  # v4.0: 扩大到100期（原50期）
     stat_data = _SSQ_HISTORY[:stat_periods]
 
-    red_freq = {i: 0 for i in range(1, 34)}
-    blue_freq = {i: 0 for i in range(1, 17)}
-    red_miss = {i: 0 for i in range(1, 34)}
-    blue_miss = {i: 0 for i in range(1, 17)}
+    # --- 引擎1: 衰减记忆加权频率（替代原等权频率） ---
+    decay_freq_red = _decay_weighted_stats(stat_data, "red", decay=0.95)
+    decay_freq_blue = _decay_weighted_stats(stat_data, "blue", decay=0.95)
 
-    for rec in stat_data:
-        for n in rec["red"]:
-            red_freq[n] += 1
-        blue_freq[rec["blue"]] += 1
+    # --- 引擎1b: 衰减遗漏值（替代原等权遗漏） ---
+    decay_miss_red = _decay_miss_with_weight(stat_data, "red", decay=0.95)
+    decay_miss_blue = _decay_miss_with_weight(stat_data, "blue", decay=0.95)
 
-    # 遗漏值
-    for num in range(1, 34):
-        for rec in stat_data:
-            if num in rec["red"]:
-                break
-            red_miss[num] += 1
-    for num in range(1, 17):
-        for rec in stat_data:
-            if num == rec["blue"]:
-                break
-            blue_miss[num] += 1
+    # --- 引擎2: 马尔可夫链转移预测 ---
+    markov_trans_red = _markov_transition(stat_data, "red")
+    markov_trans_blue = _markov_transition(stat_data, "blue")
+    last_red = _SSQ_HISTORY[0]["red"]  # 最新一期红球
+    last_blue = [_SSQ_HISTORY[0]["blue"]]  # 最新一期蓝球
+    markov_pred_red = _markov_predict(markov_trans_red, last_red, "red")
+    markov_pred_blue = _markov_predict(markov_trans_blue, last_blue, "blue")
 
-    # 统计分数（频率权重+遗漏权重）
+    # --- 引擎3: 关联规则预测 ---
+    assoc_rules_red = _association_rules(stat_data, "red", min_support=0.03, min_confidence=0.12)
+    assoc_rules_blue = _association_rules(stat_data, "blue", min_support=0.02, min_confidence=0.08)
+    assoc_pred_red = _association_predict(assoc_rules_red, last_red, "red")
+    assoc_pred_blue = _association_predict(assoc_rules_blue, last_red, "blue")  # 蓝球用上一期红球作前件
+
+    # --- 融合统计评分（三引擎加权） ---
+    # v4.0权重：衰减频率30% + 衰减遗漏20% + 马尔可夫30% + 关联规则20%
+    STAT_ENGINE_WEIGHTS = {
+        "decay_freq": 0.30,     # 衰减频率：近期热号追踪
+        "decay_miss": 0.20,     # 衰减遗漏：追冷号回补
+        "markov": 0.30,         # 马尔可夫：转移趋势预测
+        "association": 0.20,    # 关联规则：共现模式
+    }
+    _stat_weight_str = " / ".join(f"{k}×{int(v*100)}%" for k, v in STAT_ENGINE_WEIGHTS.items())
+
     stat_red_score = {}
     stat_blue_score = {}
-    max_rf = max(red_freq.values()) if red_freq.values() else 1
-    max_rm = max(red_miss.values()) if red_miss.values() else 1
-    max_bf = max(blue_freq.values()) if blue_freq.values() else 1
-    max_bm = max(blue_miss.values()) if blue_miss.values() else 1
-
     for n in range(1, 34):
-        # 频率归一化 + 遗漏归一化
-        freq_score = red_freq[n] / max_rf  # 0-1
-        miss_score = red_miss[n] / max_rm  # 0-1，遗漏越大越可能出
-        stat_red_score[n] = freq_score * 0.6 + miss_score * 0.4  # 频率6:遗漏4
-
+        stat_red_score[n] = (
+            decay_freq_red.get(n, 0) * STAT_ENGINE_WEIGHTS["decay_freq"] +
+            decay_miss_red.get(n, 0) * STAT_ENGINE_WEIGHTS["decay_miss"] +
+            markov_pred_red.get(n, 0) * STAT_ENGINE_WEIGHTS["markov"] +
+            assoc_pred_red.get(n, 0) * STAT_ENGINE_WEIGHTS["association"]
+        )
     for n in range(1, 17):
-        freq_score = blue_freq[n] / max_bf
-        miss_score = blue_miss[n] / max_bm
-        stat_blue_score[n] = freq_score * 0.6 + miss_score * 0.4
+        stat_blue_score[n] = (
+            decay_freq_blue.get(n, 0) * STAT_ENGINE_WEIGHTS["decay_freq"] +
+            decay_miss_blue.get(n, 0) * STAT_ENGINE_WEIGHTS["decay_miss"] +
+            markov_pred_blue.get(n, 0) * STAT_ENGINE_WEIGHTS["markov"] +
+            assoc_pred_blue.get(n, 0) * STAT_ENGINE_WEIGHTS["association"]
+        )
 
     # ===== 第三步：融合评分 =====
     # v3.5: 冷门号保底分（玄学0分的号码给0.5基础分，避免完全排除）
@@ -5905,7 +6198,7 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
     if auto_reason:
         lines.append(f"💡 {auto_reason}")
     lines.append(f"玄学有效维度权重（自适应·{mode}模式）：{_weight_str}")
-    lines.append(f"统计权重：频率60% + 遗漏40%")
+    lines.append(f"统计引擎v4.0权重：{_stat_weight_str}")
     _blue_weight_str = " / ".join(f"{k}×{v}" for k,v in _weights_blue.items() if v > 0)
     if _blue_weight_str != _weight_str:
         lines.append(f"蓝球独立权重：{_blue_weight_str}")
