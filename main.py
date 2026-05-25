@@ -641,9 +641,29 @@ def get_trading_signal(data, symbol):
         else:
             signals = buy_signals + sell_signals
 
-    # 计算支撑位和阻力位
-    recent_high = data['High'].tail(20).max()
-    recent_low = data['Low'].tail(20).min()
+    # V5.18.9: 动态支撑阻力位 — 多源取最近，避免20日极值在趋势行情中距当前价过远
+    recent_high_20 = data['High'].tail(20).max()
+    recent_low_20 = data['Low'].tail(20).min()
+    boll_lower = boll['lower']
+    boll_upper = boll['upper']
+
+    # 支撑候选：MA20(低于当前价)、20日低、布林下轨，取离当前价最近的
+    support_candidates = []
+    if ma20 < current_price:
+        support_candidates.append(ma20)
+    support_candidates.append(recent_low_20)
+    if boll_lower < current_price:
+        support_candidates.append(boll_lower)
+    support_level = round(max(support_candidates), 2) if support_candidates else round(recent_low_20, 2)
+
+    # 阻力候选：MA20(高于当前价)、20日高、布林上轨，取离当前价最近的
+    resistance_candidates = []
+    if ma20 > current_price:
+        resistance_candidates.append(ma20)
+    resistance_candidates.append(recent_high_20)
+    if boll_upper > current_price:
+        resistance_candidates.append(boll_upper)
+    resistance_level = round(min(resistance_candidates), 2) if resistance_candidates else round(recent_high_20, 2)
 
     return {
         "symbol": symbol,
@@ -667,8 +687,8 @@ def get_trading_signal(data, symbol):
         },
         "volume_signal": vol_status,
         "volume_ratio": vol_ratio,
-        "support_level": round(recent_low, 2),
-        "resistance_level": round(recent_high, 2),
+        "support_level": support_level,
+        "resistance_level": resistance_level,
         # V5.18.8: ADX<25震荡市用+/-DI判方向，事件驱动买点可能噪声
         "trend_direction": (
             "bullish" if adx_data["plus_di"] > adx_data["minus_di"] else
@@ -1485,9 +1505,28 @@ def analyze_forex(pair: str = "USDCNY"):
         returns = data['Close'].pct_change().dropna()
         volatility_20d = round(returns.tail(20).std() * 100, 2) if len(returns) >= 20 else 0
 
-        # 计算N日最高最低（支撑阻力参考）
-        recent_high = round(data['High'].tail(20).max(), 4)
-        recent_low = round(data['Low'].tail(20).min(), 4)
+        # V5.18.9: 动态支撑阻力位 — 多源取最近
+        ma20 = indicators["ma20"]
+        boll_lower = indicators["bollinger_bands"]["lower"]
+        boll_upper = indicators["bollinger_bands"]["upper"]
+        recent_high_20 = round(data['High'].tail(20).max(), 4)
+        recent_low_20 = round(data['Low'].tail(20).min(), 4)
+
+        support_candidates = []
+        if ma20 < current_price:
+            support_candidates.append(ma20)
+        support_candidates.append(recent_low_20)
+        if boll_lower < current_price:
+            support_candidates.append(boll_lower)
+        support_level = round(max(support_candidates), 4) if support_candidates else recent_low_20
+
+        resistance_candidates = []
+        if ma20 > current_price:
+            resistance_candidates.append(ma20)
+        resistance_candidates.append(recent_high_20)
+        if boll_upper > current_price:
+            resistance_candidates.append(boll_upper)
+        resistance_level = round(min(resistance_candidates), 4) if resistance_candidates else recent_high_20
 
         return {
             # 基础信息
@@ -1525,8 +1564,8 @@ def analyze_forex(pair: str = "USDCNY"):
             "volume_signal": str(signal_data["volume_signal"]),
             "volume_ratio": signal_data["volume_ratio"],
             "trend_direction": str(signal_data["trend_direction"]),
-            "support_level": recent_low,
-            "resistance_level": recent_high,
+            "support_level": support_level,
+            "resistance_level": resistance_level,
             # K线（文本格式）
             "kline_text": "\n".join(kline_text_lines),
             # V5.11: API层预渲染报告
@@ -1561,8 +1600,8 @@ def analyze_forex(pair: str = "USDCNY"):
                 ma50=round(indicators["ma50"], 4) if indicators["ma50"] else 0,
                 volume_signal=str(signal_data["volume_signal"]),
                 volume_ratio=signal_data["volume_ratio"],
-                support_level=recent_low,
-                resistance_level=recent_high,
+                support_level=support_level,
+                resistance_level=resistance_level,
                 kline_text="\n".join(kline_text_lines),
                 rsi_div_type=str(indicators["rsi_divergence"]["type"]),
                 rsi_div_desc=str(indicators["rsi_divergence"]["description"]),
