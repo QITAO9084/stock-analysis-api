@@ -669,7 +669,13 @@ def get_trading_signal(data, symbol):
         "volume_ratio": vol_ratio,
         "support_level": round(recent_low, 2),
         "resistance_level": round(recent_high, 2),
-        "trend_direction": "bullish" if (buy_score > sell_score) else ("bearish" if (sell_score > buy_score) else "neutral"),
+        # V5.18.8: ADX<25震荡市用+/-DI判方向，事件驱动买点可能噪声
+        "trend_direction": (
+            "bullish" if adx_data["plus_di"] > adx_data["minus_di"] else
+            ("bearish" if adx_data["minus_di"] > adx_data["plus_di"] else "neutral")
+        ) if adx_data.get("adx", 0) < 25 else (
+            "bullish" if (buy_score > sell_score) else ("bearish" if (sell_score > buy_score) else "neutral")
+        ),
         "timestamp": now_cn()
     }
 
