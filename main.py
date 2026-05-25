@@ -2706,14 +2706,15 @@ def build_formatted_report(
     lines.append(f"  MACD：{macd_score}分（{macd_label}，柱={macd_hist}）")
     # KDJ
     kdj_score = 0
+    # 金叉/死叉基础分（独立if允许与超卖/超买叠加）
     if kdj_k > kdj_d:
-        kdj_score = 5
+        kdj_score += 5
     if kdj_k < 20 and kdj_d < 20:
-        kdj_score += 10
+        kdj_score += 10  # 超卖区加分
     elif kdj_k > 80 and kdj_d > 80:
-        kdj_score -= 10
-    elif kdj_k < kdj_d:
-        kdj_score -= 5  # 死叉减分（与下方J值极端判定叠加）
+        kdj_score -= 10  # 超买区扣分
+    if kdj_k < kdj_d:
+        kdj_score -= 5  # 死叉扣分（独立if，允许与超卖/超买叠加）
     # J值极端超卖/超买（与 detect_trade_points 对齐，避免评分矛盾）
     if kdj_j < 0:
         kdj_score += 4  # J负值=深度超卖，反弹在即
