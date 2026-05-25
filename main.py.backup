@@ -1,6 +1,5 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -15,20 +14,6 @@ app = FastAPI(
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
     version="5.2.0"
 )
-
-# Coze兼容：/openapi.json/xxx → /xxx 路径重写
-class CozePathRewriteMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        if path.startswith("/openapi.json/"):
-            new_path = path[len("/openapi.json"):]  # 去掉 /openapi.json 前缀
-            # 构造新的URL scope
-            request.scope["path"] = new_path
-            request.scope["raw_path"] = new_path.encode()
-        response = await call_next(request)
-        return response
-
-app.add_middleware(CozePathRewriteMiddleware)
 
 # 允许跨域
 app.add_middleware(
@@ -1738,7 +1723,7 @@ def _get_shengke_info(day_wuxing: str) -> dict:
 
 
 @app.get("/ganzhi", tags=["双色球玄学映射"])
-async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_zhi: str = "", birthday: str = ""):
+async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_zhi: str = ""):
     """
     干支五行号码映射接口（按日期查询，专为Coze插件优化）
     �3.0：新增六柱干支号码、九宫飞星、纳音五行、八卦方位、时辰分析、热度升级。
@@ -1757,8 +1742,8 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
     except Exception:
         raise HTTPException(status_code=400, detail=f"日期格式错误，请使用YYYY-MM-DD格式，如2026-05-22")
 
-    if mode not in ("day_gan", "day_zhi", "majority", "auto"):
-        raise HTTPException(status_code=400, detail=f"mode参数错误，可选：day_gan / day_zhi / majority / auto")
+    if mode not in ("day_gan", "day_zhi", "majority"):
+        raise HTTPException(status_code=400, detail=f"mode参数错误，可选：day_gan / day_zhi / majority")
 
     valid_zhi = ['子','丑','寅','卯','辰','巳','午','未','申','酉','戌','亥']
     if hour_zhi and hour_zhi not in valid_zhi:
@@ -1786,21 +1771,6 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
     day_gan = _TIANGAN_LIST[diff % 10]
     day_zhi = _DIZHI_LIST[diff % 12]
 
-    # v3.4: birthday参数计算（base_date和干支列表已定义）
-    b_day_gan = b_day_zhi = b_day_wuxing = None
-    b_shengke = None
-    if birthday:
-        try:
-            b_parts = birthday.split('-')
-            b_date = date_cls(int(b_parts[0]), int(b_parts[1]), int(b_parts[2]))
-            b_diff = (b_date - base_date).days
-            b_day_gan = _TIANGAN_LIST[b_diff % 10]
-            b_day_zhi = _DIZHI_LIST[b_diff % 12]
-            b_day_wuxing = _TIANGAN_MAP[b_day_gan]["wuxing"]
-            b_shengke = _get_shengke_info(b_day_wuxing)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"birthday参数格式错误，请使用YYYY-MM-DD格式")
-
     # 月柱
     month_dz_map = {1:'丑', 2:'寅', 3:'卯', 4:'辰', 5:'巳', 6:'午',
                     7:'未', 8:'申', 9:'酉', 10:'戌', 11:'亥', 12:'子'}
@@ -1825,22 +1795,6 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
     wx_counter = Counter(six_pillars_wx)
 
     # P1: 旺行判定逻辑
-    auto_reason = ""
-    if mode == "auto":
-        # v3.5: auto模式自动推荐
-        top_wx, top_count = wx_counter.most_common(1)[0]
-        day_gan_wx = _TIANGAN_MAP[day_gan]["wuxing"]
-        day_zhi_wx = _DIZHI_RED_MAP[day_zhi]["wuxing"]
-        if top_count >= 4:
-            mode = "majority"
-            auto_reason = f"auto→majority：众数{top_wx}出现{top_count}次"
-        elif day_zhi_wx != day_gan_wx and top_count >= 3:
-            mode = "day_zhi"
-            auto_reason = f"auto→day_zhi：众数{top_wx}出现{top_count}次，日干≠日支"
-        else:
-            mode = "day_gan"
-            auto_reason = f"auto→day_gan：六柱分散，默认日干"
-
     if mode == "day_zhi":
         day_wuxing = _DIZHI_RED_MAP[day_zhi]["wuxing"]
         mode_desc = f"日柱地支{day_zhi}（{day_wuxing}行）"
@@ -1896,18 +1850,6 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
         f"【六柱干支号码映射（娱乐）】\n"
         + "\n".join(liuzhu_parts)
     )
-
-    # v3.4: 追加出生日柱到 formatted_liuzhu
-    if birthday and b_day_gan and b_day_zhi:
-        b_tg_red = _fmt(_TIANGAN_MAP[b_day_gan]["red_balls"])
-        b_dz_red = _fmt(_DIZHI_RED_MAP[b_day_zhi]["red_balls"])
-        b_dz_blue = f"{_DIZHI_BLUE_MAP[b_day_zhi]:02d}"
-        birth_pillar = f"- 🎂出生日柱 {b_day_gan}{b_day_zhi}：{b_day_gan}→红球 {b_tg_red} ｜{b_day_zhi}→红球 {b_dz_red} ｜蓝球 {b_dz_blue}"
-        formatted_liuzhu += "\n" + birth_pillar
-        liuzhu_red_all.extend(_TIANGAN_MAP[b_day_gan]["red_balls"])
-        liuzhu_red_all.extend(_DIZHI_RED_MAP[b_day_zhi]["red_balls"])
-        liuzhu_blue_all.append(_DIZHI_BLUE_MAP[b_day_zhi])
-
 
     # ===== v3.0 P0-2: 九宫飞星号码 =====
     year_star = _get_year_feixing(solar_date.year)
@@ -2033,23 +1975,6 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
         for n in hour_blue_all:
             blue_heat[n] = blue_heat.get(n, 0) + 1
 
-    # 维度9：出生信息（v3.5，生我行权重×2，克我行×0负面）
-    if birthday and b_shengke:
-        for n in _WUXING_MAP[b_shengke["旺行"]]["red_balls"]:
-            red_heat[n] = red_heat.get(n, 0) + 1
-        for n in _WUXING_MAP[b_shengke["旺行"]]["blue_balls"]:
-            blue_heat[n] = blue_heat.get(n, 0) + 1
-        for n in _WUXING_MAP[b_shengke["生我行"]]["red_balls"]:
-            red_heat[n] = red_heat.get(n, 0) + 2  # v3.5: +3.03%有效，权重×2
-        for n in _WUXING_MAP[b_shengke["生我行"]]["blue_balls"]:
-            blue_heat[n] = blue_heat.get(n, 0) + 1
-        # v3.5: 克我行-3.25%负面，不参与热度
-        for n in _TIANGAN_MAP[b_day_gan]["red_balls"]:
-            red_heat[n] = red_heat.get(n, 0) + 1
-        for n in _DIZHI_RED_MAP[b_day_zhi]["red_balls"]:
-            red_heat[n] = red_heat.get(n, 0) + 1
-        blue_heat[_DIZHI_BLUE_MAP[b_day_zhi]] = blue_heat.get(_DIZHI_BLUE_MAP[b_day_zhi], 0) + 1
-
     # 按热度排序
     sorted_red = sorted(red_heat.items(), key=lambda x: (-x[1], x[0]))
     sorted_blue = sorted(blue_heat.items(), key=lambda x: (-x[1], x[0]))
@@ -2105,27 +2030,6 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
     ]
     formatted_shengke = "\n".join(shengke_lines)
 
-    # v3.4: 出生维度追加到 formatted_shengke
-    if birthday and b_shengke:
-        b_wang_red = _fmt(_WUXING_MAP[b_shengke["旺行"]]["red_balls"])
-        b_wang_blue = _fmt(_WUXING_MAP[b_shengke["旺行"]]["blue_balls"])
-        b_sheng_wo_red = _fmt(_WUXING_MAP[b_shengke["生我行"]]["red_balls"])
-        b_sheng_wo_blue = _fmt(_WUXING_MAP[b_shengke["生我行"]]["blue_balls"])
-        b_wo_sheng_red = _fmt(_WUXING_MAP[b_shengke["我生行(泄)"]]["red_balls"])
-        b_ke_wo_red = _fmt(_WUXING_MAP[b_shengke["克我行"]]["red_balls"])
-        b_ke_wo_blue = _fmt(_WUXING_MAP[b_shengke["克我行"]]["blue_balls"])
-        b_wo_ke_red = _fmt(_WUXING_MAP[b_shengke["我克行"]]["red_balls"])
-        birth_lines = [
-            "",
-            f"🎂 出生维度（{birthday}·{b_day_gan}{b_day_zhi}日·{b_day_wuxing}行）：",
-            f"- 出生旺行（{b_shengke['旺行']}）：红球 {b_wang_red} ｜蓝球 {b_wang_blue}",
-            f"- 出生生我行（{b_shengke['生我行']}→{b_shengke['旺行']}）：红球 {b_sheng_wo_red} ｜蓝球 {b_sheng_wo_blue}",
-            f"- 出生我生行·泄（{b_shengke['旺行']}→{b_shengke['我生行(泄)']}）：{b_wo_sheng_red}",
-            f"- 出生克我行（{b_shengke['克我行']}→{b_shengke['旺行']}）：红球 {b_ke_wo_red} ｜蓝球 {b_ke_wo_blue}",
-            f"- 出生我克行（{b_shengke['旺行']}→{b_shengke['我克行']}）：{b_wo_ke_red}",
-        ]
-        formatted_shengke += "\n" + "\n".join(birth_lines)
-
     formatted_sun_moon = (
         f"【日月水火分析（娱乐）】\n"
         f"- 日·太阳（{_SUN_MOON_MAP['日']['desc']}）：红球 {_fmt(_SUN_MOON_MAP['日']['red_balls'])} ｜蓝球 {_fmt(_SUN_MOON_MAP['日']['blue_balls'])}\n"
@@ -2151,15 +2055,10 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
     conflict_red_str = "、".join(f"{n:02d}" for n in conflict_red) if conflict_red else "无"
     conflict_blue_str = "、".join(f"{n:02d}" for n in conflict_blue) if conflict_blue else "无"
 
-    dimension_count = (9 if hour_zhi else 8) if (birthday and b_shengke) else (8 if hour_zhi else 7)
-    _dim_names = "旺行+生我行+日月+月相+六柱干支+纳音五行+飞星方位"
-    if hour_zhi:
-        _dim_names += "+时辰"
-    if birthday and b_shengke:
-        _dim_names += "+🎂出生"
+    dimension_count = 8 if hour_zhi else 7
     summary_lines = [
         f"【综合号码热度汇总（娱乐）】",
-        f"以下号码在{dimension_count}个维度（{_dim_names}）重合出现，⭐越多重合度越高：",
+        f"以下号码在{dimension_count}个维度（旺行+生我行+日月+月相+六柱干支+纳音五行+飞星方位{'+时辰' if hour_zhi else ''}）重合出现，⭐越多重合度越高：",
         f"",
         f"🔥 红球热度TOP15：{'  '.join(red_summary_parts)}",
         f"🔵 蓝球热度TOP8：{'  '.join(blue_summary_parts)}",
@@ -2178,12 +2077,8 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
         f"❄️ 冷门红球（无维度覆盖）：{cold_red_str}",
         f"❄️ 冷门蓝球（无维度覆盖）：{cold_blue_str}",
         f"",
-        f"💡 旺行判定模式：{mode_desc}" + (f"（{auto_reason}）" if auto_reason else ""),
+        f"💡 旺行判定模式：{mode_desc}",
     ])
-    if birthday and b_day_gan:
-        summary_lines.extend([
-            f"🎂 出生维度模式：{b_day_gan}{b_day_zhi}日·{b_day_wuxing}行（仅供参考）",
-        ])
     formatted_summary = "\n".join(summary_lines)
 
     result = {
@@ -2528,69 +2423,6 @@ async def ssq_analysis(periods: int = 50):
         f"🔄 重号平均：{avg_repeat}个/期，分布：{'  '.join([f'{k}个({v}期)' for k, v in sorted(repeat_detail.items()) if v > 0])}"
     )
 
-    # ===== v4.0 新增：马尔可夫预测 + 衰减记忆 + 关联规则 =====
-    # 马尔可夫链预测（基于近periods期转移矩阵）
-    markov_trans_red = _markov_transition(data, "red")
-    markov_trans_blue = _markov_transition(data, "blue")
-    last_red = data[0]["red"]
-    last_blue = [data[0]["blue"]]
-    markov_pred_red = _markov_predict(markov_trans_red, last_red, "red")
-    markov_pred_blue = _markov_predict(markov_trans_blue, last_blue, "blue")
-
-    markov_red_top5 = sorted(markov_pred_red.items(), key=lambda x: -x[1])[:5]
-    markov_blue_top3 = sorted(markov_pred_blue.items(), key=lambda x: -x[1])[:3]
-
-    # 衰减记忆频率
-    decay_freq_red = _decay_weighted_stats(data, "red", 0.95)
-    decay_freq_blue = _decay_weighted_stats(data, "blue", 0.95)
-    decay_red_top5 = sorted(decay_freq_red.items(), key=lambda x: -x[1])[:5]
-    decay_blue_top3 = sorted(decay_freq_blue.items(), key=lambda x: -x[1])[:3]
-
-    # 关联规则
-    assoc_rules_red = _association_rules(data, "red", min_support=0.03, min_confidence=0.12)
-    assoc_rules_blue = _association_rules(data, "blue", min_support=0.02, min_confidence=0.08)
-
-    formatted_analysis += (
-        f"\n\n【v4.0 统计引擎升级】\n\n"
-        f"🔮 马尔可夫预测红球TOP5：{'  '.join([f'{n:02d}({s:.1%})' for n,s in markov_red_top5])}\n"
-        f"🔮 马尔可夫预测蓝球TOP3：{'  '.join([f'{n:02d}({s:.1%})' for n,s in markov_blue_top3])}\n\n"
-        f"📉 衰减频率红球TOP5：{'  '.join([f'{n:02d}({s:.2f})' for n,s in decay_red_top5])}\n"
-        f"📉 衰减频率蓝球TOP3：{'  '.join([f'{n:02d}({s:.2f})' for n,s in decay_blue_top3])}\n\n"
-        f"🔗 关联规则(红球)：{len(assoc_rules_red)}条有效规则，TOP3：{'  '.join([f'{a}→{b}({c:.0%})' for a,b,c,_,_ in assoc_rules_red[:3]])}\n"
-        f"🔗 关联规则(蓝球)：{len(assoc_rules_blue)}条有效规则，TOP3：{'  '.join([f'红{a}→蓝{b}({c:.0%})' for a,b,c,_,_ in assoc_rules_blue[:3]])}"
-    )
-
-    # v4.1 冷热周期识别
-    hot_cold_red_a = _hot_cold_cycle(data, "red", window=10)
-    hot_cold_blue_a = _hot_cold_cycle(data, "blue", window=10)
-
-    # 冷热周期摘要
-    cold_to_warm_r = [n for n in range(1,34) if hot_cold_red_a[n]["turn"] == "冷→温↑"]
-    warm_to_hot_r = [n for n in range(1,34) if hot_cold_red_a[n]["turn"] == "温→热↑"]
-    hot_stable_r = [n for n in range(1,34) if hot_cold_red_a[n]["turn"] == "热→"]
-    hot_cooling_r = [n for n in range(1,34) if hot_cold_red_a[n]["turn"] == "热→温↓"]
-    cold_stable_r = [n for n in range(1,34) if hot_cold_red_a[n]["turn"] == "冷→"]
-    warm_cooling_r = [n for n in range(1,34) if hot_cold_red_a[n]["turn"] == "温→冷↓"]
-
-    cold_to_warm_b = [n for n in range(1,17) if hot_cold_blue_a[n]["turn"] == "冷→温↑"]
-    warm_to_hot_b = [n for n in range(1,17) if hot_cold_blue_a[n]["turn"] == "温→热↑"]
-    hot_stable_b = [n for n in range(1,17) if hot_cold_blue_a[n]["turn"] == "热→"]
-    hot_cooling_b = [n for n in range(1,17) if hot_cold_blue_a[n]["turn"] == "热→温↓"]
-
-    formatted_analysis += (
-        f"\n\n【v4.1 冷热周期识别】\n\n"
-        f"🌡️ 红球冷转热（追冷回补⭐）：{'  '.join([f'{n:02d}' for n in sorted(cold_to_warm_r)])}\n"
-        f"🌡️ 红球温转热（升温中）：{'  '.join([f'{n:02d}' for n in sorted(warm_to_hot_r)])}\n"
-        f"🌡️ 红球稳定热号：{'  '.join([f'{n:02d}' for n in sorted(hot_stable_r)])}\n"
-        f"🌡️ 红球热转冷（警惕⚠️）：{'  '.join([f'{n:02d}' for n in sorted(hot_cooling_r)])}\n"
-        f"🌡️ 红球温转冷：{'  '.join([f'{n:02d}' for n in sorted(warm_cooling_r)])}\n"
-        f"🌡️ 红球稳定冷号：{'  '.join([f'{n:02d}' for n in sorted(cold_stable_r)])}\n\n"
-        f"🔵 蓝球冷转热⭐：{'  '.join([f'{n:02d}' for n in sorted(cold_to_warm_b)])}\n"
-        f"🔵 蓝球温转热：{'  '.join([f'{n:02d}' for n in sorted(warm_to_hot_b)])}\n"
-        f"🔵 蓝球稳定热号：{'  '.join([f'{n:02d}' for n in sorted(hot_stable_b)])}\n"
-        f"🔵 蓝球热转冷⚠️：{'  '.join([f'{n:02d}' for n in sorted(hot_cooling_b)])}"
-    )
-
     return {
         "periods_analyzed": periods,
         "date_range": f"{data[-1]['date']} ~ {data[0]['date']}" if data else "",
@@ -2607,516 +2439,26 @@ async def ssq_analysis(periods: int = 50):
     }
 
 
-# ===== v4.0 统计引擎升级：马尔可夫链 + 衰减记忆 + 关联规则 =====
-
-def _markov_transition(data, ball_type="red"):
-    """
-    P1: 一阶马尔可夫链转移矩阵
-
-    统计历史开奖中「当前期出i → 下期出j」的转移概率。
-    返回: {i: {j: probability}} 归一化转移概率矩阵
-
-    ball_type: "red" 红球(1-33) / "blue" 蓝球(1-16)
-    data: 历史开奖列表（最新期在前）
-    """
-    if ball_type == "red":
-        nums = range(1, 34)
-    else:
-        nums = range(1, 17)
-
-    # 统计转移计数：data是最新期在前，data[i+1]是前一期的下一期（更早）
-    # 所以 data[i] → data[i+1] 表示"从新一期到更早一期"，但我们关心的是"从上一期预测下一期"
-    # 正确方向：data[i+1](更早) → data[i](更新)，即 prev→current
-    trans_count = {i: {j: 0 for j in nums} for i in nums}
-    trans_total = {i: 0 for i in nums}
-
-    for idx in range(len(data) - 1):
-        prev_rec = data[idx + 1]  # 更早的一期（上一期）
-        curr_rec = data[idx]      # 更新的一期（下一期）
-
-        if ball_type == "red":
-            prev_balls = prev_rec["red"]
-            curr_balls = curr_rec["red"]
-        else:
-            prev_balls = [prev_rec["blue"]]
-            curr_balls = [curr_rec["blue"]]
-
-        for p in prev_balls:
-            trans_total[p] += 1
-            for c in curr_balls:
-                trans_count[p][c] += 1
-
-    # 归一化为概率
-    trans_prob = {}
-    for i in nums:
-        total = trans_total[i]
-        if total > 0:
-            trans_prob[i] = {j: trans_count[i][j] / total for j in nums}
-        else:
-            trans_prob[i] = {j: 1.0 / len(list(nums)) for j in nums}
-
-    return trans_prob
-
-
-def _markov_predict(trans_prob, last_numbers, ball_type="red"):
-    """
-    基于马尔可夫转移矩阵预测下期各号码出现概率。
-
-    last_numbers: 上一期开出的号码列表
-    返回: {num: probability} 各号码的预测概率
-    """
-    if ball_type == "red":
-        nums = range(1, 34)
-    else:
-        nums = range(1, 17)
-
-    # 对于每个候选号码，累加从上一期各号码转移过来的概率
-    scores = {n: 0.0 for n in nums}
-    for prev in last_numbers:
-        if prev in trans_prob:
-            for n in nums:
-                scores[n] += trans_prob[prev].get(n, 0)
-
-    # 归一化
-    total = sum(scores.values())
-    if total > 0:
-        scores = {n: s / total for n, s in scores.items()}
-
-    return scores
-
-
-def _decay_weighted_stats(data, ball_type="red", decay=0.95):
-    """
-    P2: 衰减记忆加权统计
-
-    近期数据权重更高（指数衰减），远期数据权重递减。
-    替代当前等权统计（频率60%+遗漏40%）。
-
-    decay: 衰减系数，0.95表示每期权重乘0.95
-    data: 历史开奖列表（最新期在前，index0=最新）
-    返回: {num: weighted_score} 归一化到0-1的衰减加权分
-    """
-    if ball_type == "red":
-        nums = range(1, 34)
-    else:
-        nums = range(1, 17)
-
-    weighted_freq = {n: 0.0 for n in nums}
-    # data[0]最新 → 权重1.0（decay^0），data[1] → decay^1, ...
-    for idx, rec in enumerate(data):
-        w = decay ** idx  # 指数衰减
-        if ball_type == "red":
-            for n in rec["red"]:
-                weighted_freq[n] += w
-        else:
-            weighted_freq[rec["blue"]] += w
-
-    # 归一化到0-1
-    max_w = max(weighted_freq.values()) if weighted_freq.values() else 1
-    if max_w == 0:
-        max_w = 1
-    scores = {n: weighted_freq[n] / max_w for n in nums}
-
-    return scores
-
-
-def _decay_miss_with_weight(data, ball_type="red", decay=0.95):
-    """
-    P2补充: 衰减遗漏值 - 越久没出且权重高 → 越应该出
-
-    与传统遗漏不同，这里加入衰减因子：近期遗漏权重更高。
-    返回: {num: weighted_miss_score} 归一化到0-1
-    """
-    if ball_type == "red":
-        nums = range(1, 34)
-    else:
-        nums = range(1, 17)
-
-    miss_score = {n: 0.0 for n in nums}
-
-    for n in nums:
-        # 找到该号码最近一次出现的位置
-        for idx, rec in enumerate(data):
-            if ball_type == "red" and n in rec["red"]:
-                # 出现了，遗漏期数=idx，权重=decay^idx
-                miss_score[n] = decay ** idx
-                break
-            elif ball_type == "blue" and rec["blue"] == n:
-                miss_score[n] = decay ** idx
-                break
-        else:
-            # 全部都没出现，给最低分
-            miss_score[n] = 0.0
-
-    # 反转：遗漏越久（miss_score越低）→ 补回概率越高
-    # 但衰减遗漏的逻辑是：已经很久没出的号码，如果近期权重高说明"该出了"
-    # 实际上miss_score=decay^idx，idx=遗漏期数，遗漏越久miss_score越低
-    # 我们要的是"遗漏越久越可能出"，所以反转
-    inverted = {n: 1.0 - miss_score[n] for n in nums}
-
-    # 归一化
-    max_inv = max(inverted.values()) if inverted.values() else 1
-    if max_inv == 0:
-        max_inv = 1
-    scores = {n: inverted[n] / max_inv for n in nums}
-
-    return scores
-
-
-def _association_rules(data, ball_type="red", min_support=0.03, min_confidence=0.12):
-    """
-    P3: 关联规则挖掘（Apriori简化版）
-
-    挖掘号码共现模式：如果出A则大概率出B。
-    对于红球：挖掘"如果本期出A则下期出B"的转移关联规则
-    对于蓝球：挖掘"如果本期红球出A则下期蓝球出B"的跨维度规则
-
-    min_support: 最小支持度（规则在所有期中出现的最低比例）
-    min_confidence: 最小置信度（P(B|A)的最低值）
-    返回: [(antecedent, consequent, confidence, support)] 排序后的规则列表
-    """
-    rules = []
-
-    if ball_type == "red":
-        # 红球→红球转移关联：本期出A → 下期出B
-        pair_count = {}  # {(a, b): count}
-        a_count = {}     # {a: count} 前件出现次数
-
-        for idx in range(len(data) - 1):
-            curr_red = data[idx]["red"]  # 当前期
-            prev_red = data[idx + 1]["red"]  # 上一期（更早）
-
-            for a in prev_red:
-                a_count[a] = a_count.get(a, 0) + 1
-                for b in curr_red:
-                    key = (a, b)
-                    pair_count[key] = pair_count.get(key, 0) + 1
-
-        total_periods = len(data) - 1
-
-        for (a, b), cnt in pair_count.items():
-            support = cnt / total_periods
-            confidence = cnt / a_count[a] if a_count[a] > 0 else 0
-            # 过滤：支持度>min_support 且 置信度>min_confidence 且 高于随机概率
-            random_prob = 6 / 33  # 红球随机概率≈18.18%
-            if support >= min_support and confidence >= min_confidence and confidence > random_prob:
-                lift = confidence / random_prob  # 提升度
-                rules.append((a, b, round(confidence, 4), round(support, 4), round(lift, 4)))
-
-    elif ball_type == "blue":
-        # 红球→蓝球转移关联：本期红球出A → 下期蓝球出B
-        pair_count = {}
-        a_count = {}
-
-        for idx in range(len(data) - 1):
-            curr_blue = data[idx]["blue"]
-            prev_red = data[idx + 1]["red"]
-
-            for a in prev_red:
-                a_count[a] = a_count.get(a, 0) + 1
-                key = (a, curr_blue)
-                pair_count[key] = pair_count.get(key, 0) + 1
-
-        total_periods = len(data) - 1
-
-        for (a, b), cnt in pair_count.items():
-            support = cnt / total_periods
-            confidence = cnt / a_count[a] if a_count[a] > 0 else 0
-            random_prob = 1 / 16  # 蓝球随机概率≈6.25%
-            if support >= min_support and confidence >= min_confidence and confidence > random_prob:
-                lift = confidence / random_prob
-                rules.append((a, b, round(confidence, 4), round(support, 4), round(lift, 4)))
-
-    # 按置信度降序排列
-    rules.sort(key=lambda x: (-x[2], -x[3]))
-    return rules
-
-
-def _association_predict(rules, last_numbers, ball_type="red"):
-    """
-    基于关联规则预测下期各号码得分。
-
-    last_numbers: 上一期开出的号码列表（红球或蓝球）
-    返回: {num: score} 归一化到0-1的关联规则预测分
-    """
-    if ball_type == "red":
-        nums = range(1, 34)
-    else:
-        nums = range(1, 17)
-
-    scores = {n: 0.0 for n in nums}
-
-    for rule in rules:
-        antecedent, consequent, confidence, support, lift = rule
-        if antecedent in last_numbers:
-            scores[consequent] += confidence * lift  # 置信度×提升度作为权重
-
-    # 归一化到0-1
-    max_s = max(scores.values()) if scores.values() else 1
-    if max_s == 0:
-        max_s = 1
-    scores = {n: s / max_s for n, s in scores.items()}
-
-    return scores
-
-
-def _hot_cold_cycle(data, ball_type="red", window=10):
-    """
-    v4.1 P4: 冷热周期识别引擎
-
-    用滑动窗口统计每个号码的冷热状态和转换拐点。
-    - window: 滑动窗口期数，默认10期
-    返回: {
-        num: {
-            "status": "hot"/"warm"/"cold",       # 当前冷热状态
-            "trend": "rising"/"falling"/"stable",  # 趋势方向
-            "freq_recent": float,                  # 近window期出现频率
-            "freq_prev": float,                    # 前window期出现频率（对比用）
-            "turn": str,                           # 拐点描述（如"冷→温↑"）
-            "score": float,                        # 0-1冷热周期得分（冷转热得分最高）
-        }
-    }
-    """
-    if ball_type == "red":
-        nums = range(1, 34)
-    else:
-        nums = range(1, 17)
-
-    total = len(data)
-    if total < window * 2:
-        # 数据不足，返回默认
-        return {n: {"status": "warm", "trend": "stable", "freq_recent": 0,
-                     "freq_prev": 0, "turn": "数据不足", "score": 0.5} for n in nums}
-
-    # 近window期 vs 前window期对比
-    recent_data = data[:window]
-    prev_data = data[window:window*2]
-
-    result = {}
-    for n in nums:
-        # 近期频率
-        freq_recent = sum(1 for rec in recent_data
-                          if n in (rec["red"] if ball_type == "red" else [rec["blue"]])) / window
-        # 前期频率
-        freq_prev = sum(1 for rec in prev_data
-                        if n in (rec["red"] if ball_type == "red" else [rec["blue"]])) / window
-
-        # 冷热状态判定（基于近期频率）
-        if ball_type == "red":
-            # 红球期望频率 = 6/33 ≈ 0.182
-            if freq_recent >= 0.25:
-                status = "hot"
-            elif freq_recent >= 0.10:
-                status = "warm"
-            else:
-                status = "cold"
-        else:
-            # 蓝球期望频率 = 1/16 ≈ 0.0625
-            if freq_recent >= 0.12:
-                status = "hot"
-            elif freq_recent >= 0.04:
-                status = "warm"
-            else:
-                status = "cold"
-
-        # 趋势判定（近期vs前期频率变化）
-        delta = freq_recent - freq_prev
-        if delta > 0.08:
-            trend = "rising"
-        elif delta < -0.08:
-            trend = "falling"
-        else:
-            trend = "stable"
-
-        # 拐点描述
-        status_cn = {"hot": "热", "warm": "温", "cold": "冷"}
-        trend_cn = {"rising": "↑", "falling": "↓", "stable": "→"}
-        turn = f"{status_cn[status]}{trend_cn[trend]}"
-
-        # 特殊拐点标记
-        if status == "cold" and trend == "rising":
-            turn = "冷→温↑"  # 冷转热拐点！最有价值
-        elif status == "hot" and trend == "falling":
-            turn = "热→温↓"  # 热转冷拐点，需警惕
-        elif status == "warm" and trend == "rising":
-            turn = "温→热↑"  # 正在升温
-        elif status == "warm" and trend == "falling":
-            turn = "温→冷↓"  # 正在降温
-
-        # 冷热周期得分（0-1）
-        # 核心逻辑：冷转热得分最高（追冷回补），热且稳定次之（追热），热转冷最低（避开）
-        if status == "cold" and trend == "rising":
-            score = 0.95  # 冷转热拐点，最高分
-        elif status == "warm" and trend == "rising":
-            score = 0.80  # 温转热
-        elif status == "hot" and trend == "stable":
-            score = 0.70  # 稳定热号
-        elif status == "hot" and trend == "rising":
-            score = 0.65  # 持续升温
-        elif status == "warm" and trend == "stable":
-            score = 0.50  # 中性温号
-        elif status == "cold" and trend == "stable":
-            score = 0.40  # 稳定冷号
-        elif status == "warm" and trend == "falling":
-            score = 0.30  # 温转冷
-        elif status == "cold" and trend == "falling":
-            score = 0.15  # 极冷下降
-        elif status == "hot" and trend == "falling":
-            score = 0.25  # 热转冷
-        else:
-            score = 0.50
-
-        result[n] = {
-            "status": status,
-            "trend": trend,
-            "freq_recent": round(freq_recent, 3),
-            "freq_prev": round(freq_prev, 3),
-            "turn": turn,
-            "score": score,
-        }
-
-    return result
-
-
-def _adaptive_engine_weights(data, window=30):
-    """
-    v4.1 P8: 自适应引擎权重
-
-    根据最近window期各统计引擎的预测准确度，动态调整权重。
-    - window: 评估窗口期数，默认30期
-    返回: {"decay_freq": float, "decay_miss": float, "markov": float, "association": float}
-    """
-    total = len(data)
-    if total < window + 10:
-        # 数据不足，使用默认权重
-        return {"decay_freq": 0.30, "decay_miss": 0.20, "markov": 0.30, "association": 0.20}
-
-    # 对最近window期，每期用前10期数据预测，计算各引擎命中率
-    engine_hits = {"decay_freq": 0, "decay_miss": 0, "markov": 0, "association": 0}
-    engine_total = 0
-
-    eval_data = data[:window]
-    train_base = 10  # 每次预测用的训练数据期数
-
-    for i in range(len(eval_data) - 1):
-        actual_red = set(eval_data[i]["red"])
-        actual_blue = {eval_data[i]["blue"]}
-
-        # 训练数据：从当前期往后取train_base期（数据是倒序的）
-        train_start = i + 1
-        train_end = min(i + 1 + train_base, total)
-        if train_end - train_start < 5:
-            continue
-
-        train = data[train_start:train_end]
-        last_red = data[train_start]["red"]  # 上一期红球
-        last_blue = [data[train_start]["blue"]]
-
-        # 引擎1: 衰减频率
-        df_red = _decay_weighted_stats(train, "red", decay=0.95)
-        df_top6 = set(sorted(df_red, key=df_red.get, reverse=True)[:6])
-
-        # 引擎1b: 衰减遗漏
-        dm_red = _decay_miss_with_weight(train, "red", decay=0.95)
-        dm_top6 = set(sorted(dm_red, key=dm_red.get, reverse=True)[:6])
-
-        # 引擎2: 马尔可夫
-        mt_red = _markov_transition(train, "red")
-        mp_red = _markov_predict(mt_red, last_red, "red")
-        mk_top6 = set(sorted(mp_red, key=mp_red.get, reverse=True)[:6])
-
-        # 引擎3: 关联规则
-        ar_red = _association_rules(train, "red", min_support=0.03, min_confidence=0.12)
-        ap_red = _association_predict(ar_red, last_red, "red")
-        as_top6 = set(sorted(ap_red, key=ap_red.get, reverse=True)[:6])
-
-        # 命中判定：TOP6与实际交集≥2个算命中
-        if len(df_top6 & actual_red) >= 2:
-            engine_hits["decay_freq"] += 1
-        if len(dm_top6 & actual_red) >= 2:
-            engine_hits["decay_miss"] += 1
-        if len(mk_top6 & actual_red) >= 2:
-            engine_hits["markov"] += 1
-        if len(as_top6 & actual_red) >= 2:
-            engine_hits["association"] += 1
-
-        engine_total += 1
-
-    if engine_total == 0:
-        return {"decay_freq": 0.30, "decay_miss": 0.20, "markov": 0.30, "association": 0.20}
-
-    # 计算各引擎命中率
-    hit_rates = {k: v / engine_total for k, v in engine_hits.items()}
-
-    # 基于命中率分配权重（命中率越高权重越大，保底10%）
-    total_hit = sum(hit_rates.values())
-    if total_hit == 0:
-        return {"decay_freq": 0.30, "decay_miss": 0.20, "markov": 0.30, "association": 0.20}
-
-    weights = {}
-    for engine, rate in hit_rates.items():
-        weights[engine] = max(0.10, rate / total_hit)  # 保底10%
-
-    # 归一化到总和=1
-    w_sum = sum(weights.values())
-    weights = {k: round(v / w_sum, 2) for k, v in weights.items()}
-
-    return weights
-
-
-@ app.get("/ssq/backtest", tags=["双色球历史数据"])
-async def ssq_backtest(periods: int = 200, mode: str = "day_gan", birthday: str = ""):
+@app.get("/ssq/backtest", tags=["双色球历史数据"])
+async def ssq_backtest(periods: int = 200, mode: str = "day_gan"):
     """
     双色球玄学维度回测验证
 
     对历史每期数据，用/ganzhi相同逻辑计算各维度号码，与实际开奖号码对比。
-    - **periods**: 回测最近N期，默认200，最大2144
-    - **mode**: 旺行判定逻辑，可选：
-      - day_gan（默认）：日柱天干五行
-      - day_zhi：日柱地支五行
-      - majority：六柱综合众数
-      - all：三种模式并行回测，对比结果并推荐最优
+    - **periods**: 回测最近N期，默认50，最大129
+    - **mode**: 旺行判定逻辑，同/ganzhi
 
     返回每个维度在红球/蓝球中的命中率，与随机概率对比。
-    当mode="all"时，额外返回三种模式的对比结果和推荐。
     """
     if not _SSQ_HISTORY:
         raise HTTPException(status_code=503, detail="历史数据未加载")
     periods = min(periods, len(_SSQ_HISTORY))
     data = _SSQ_HISTORY[:periods]
 
-    if mode not in ("day_gan", "day_zhi", "majority", "all"):
-        raise HTTPException(
-            status_code=400,
-            detail="mode参数错误，可选：day_gan / day_zhi / majority / all"
-        )
+    if mode not in ("day_gan", "day_zhi", "majority"):
+        raise HTTPException(status_code=400, detail="mode参数错误，可选：day_gan / day_zhi / majority")
 
-    # 如果mode="all"，并行跑三种模式
-    if mode == "all":
-        results_all = {}
-        for m in ["day_gan", "day_zhi", "majority"]:
-            result = await _run_backtest(data, periods, m, birthday)
-            results_all[m] = result
-        # 对比三种模式，生成推荐
-        recommend = _compare_backtest_modes(results_all, periods)
-        return {
-            "periods_tested": periods,
-            "mode": "all",
-            "results_all": results_all,
-            "formatted_backtest_all": recommend["formatted"],
-            "recommend_mode": recommend["recommend_mode"],
-            "recommend_reason": recommend["reason"],
-        }
-
-    # 单模式回测
-    result = await _run_backtest(data, periods, mode, birthday)
-    return result
-
-
-async def _run_backtest(data, periods, mode, birthday=""):
-    """
-    内部函数：对指定数据和mode执行回测
-    """
+    # 各维度统计
     dim_stats = {
         "旺行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "生我行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
@@ -3124,22 +2466,18 @@ async def _run_backtest(data, periods, mode, birthday=""):
         "克我行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "我克行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "纳音五行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
+        "月相": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "六柱干支": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "飞星方位": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
-        "🎂出生旺行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
-        "🎂出生生我行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
-        "🎂出生克我行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
-        "🎂出生我生行·泄": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
-        "🎂出生日柱": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
     }
 
-    _TIANGAN_LIST = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸']
-    _DIZHI_LIST = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥']
-    month_dz_map_bt = {1: '丑', 2: '寅', 3: '卯', 4: '辰', 5: '巳', 6: '午',
-                      7: '未', 8: '申', 9: '酉', 10: '戌', 11: '亥', 12: '子'}
-    tg_start_map_bt = {'甲': '丙', '己': '丙', '乙': '戊', '庚': '戊', '丙': '庚', '辛': '庚',
-                       '丁': '壬', '壬': '壬', '戊': '甲', '癸': '甲'}
-    month_dz_order_bt = ['寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥', '子', '丑']
+    _TIANGAN_LIST = ['甲','乙','丙','丁','戊','己','庚','辛','壬','癸']
+    _DIZHI_LIST = ['子','丑','寅','卯','辰','巳','午','未','申','酉','戌','亥']
+    month_dz_map_bt = {1:'丑', 2:'寅', 3:'卯', 4:'辰', 5:'巳', 6:'午',
+                    7:'未', 8:'申', 9:'酉', 10:'戌', 11:'亥', 12:'子'}
+    tg_start_map_bt = {'甲':'丙','己':'丙','乙':'戊','庚':'戊','丙':'庚','辛':'庚',
+                     '丁':'壬','壬':'壬','戊':'甲','癸':'甲'}
+    month_dz_order_bt = ['寅','卯','辰','巳','午','未','申','酉','戌','亥','子','丑']
 
     from datetime import date as date_cls
     from lunarcalendar import Converter, Solar
@@ -3151,9 +2489,7 @@ async def _run_backtest(data, periods, mode, birthday=""):
         date_str = rec["date"]
         if not date_str:
             continue
-        # 兼容日期格式：清理中文星期如"2020-01-21(二)"→"2020-01-21"
-        clean_date = date_str.split('(')[0] if '(' in date_str else date_str
-        parts = clean_date.split('-')
+        parts = date_str.split('-')
         try:
             solar_date = date_cls(int(parts[0]), int(parts[1]), int(parts[2]))
         except:
@@ -3197,6 +2533,9 @@ async def _run_backtest(data, periods, mode, birthday=""):
         except:
             continue
 
+        # 月相
+        moon_phase = _MOON_PHASE.get(lunar_day, "未知")
+
         # 实际开奖号码
         actual_red = set(rec["red"])
         actual_blue = rec["blue"]
@@ -3239,6 +2578,12 @@ async def _run_backtest(data, periods, mode, birthday=""):
                         set(_WUXING_MAP[nayin_wuxing]["red_balls"]),
                         set(_WUXING_MAP[nayin_wuxing]["blue_balls"]))
 
+        # 月相
+        if moon_phase and moon_phase in _MOON_PHASE_RED:
+            _count_dim("月相",
+                        set(_MOON_PHASE_RED[moon_phase]),
+                        set(_MOON_PHASE_BLUE.get(moon_phase, [])))
+
         # 六柱干支
         liuzhu_red = set()
         liuzhu_blue = set()
@@ -3255,42 +2600,9 @@ async def _run_backtest(data, periods, mode, birthday=""):
                         set(bagua["red_balls"]),
                         set(bagua["blue_balls"]))
 
-        # v3.5: 出生维度回测（birthday参数）
-        if birthday:
-            try:
-                b_parts = birthday.split('-')
-                b_date = date_cls(int(b_parts[0]), int(b_parts[1]), int(b_parts[2]))
-                b_diff = (b_date - base_date).days
-                b_day_gan = _TIANGAN_LIST[b_diff % 10]
-                b_day_zhi = _DIZHI_LIST[b_diff % 12]
-                b_day_wuxing = _TIANGAN_MAP[b_day_gan]["wuxing"]
-                b_shengke = _get_shengke_info(b_day_wuxing)
-                # 出生旺行
-                _count_dim("🎂出生旺行",
-                            set(_WUXING_MAP[b_shengke["旺行"]]["red_balls"]),
-                            set(_WUXING_MAP[b_shengke["旺行"]]["blue_balls"]))
-                # 出生生我行
-                _count_dim("🎂出生生我行",
-                            set(_WUXING_MAP[b_shengke["生我行"]]["red_balls"]),
-                            set(_WUXING_MAP[b_shengke["生我行"]]["blue_balls"]))
-                # 出生克我行
-                _count_dim("🎂出生克我行",
-                            set(_WUXING_MAP[b_shengke["克我行"]]["red_balls"]),
-                            set(_WUXING_MAP[b_shengke["克我行"]]["blue_balls"]))
-                # 出生我生行·泄
-                _count_dim("🎂出生我生行·泄",
-                            set(_WUXING_MAP[b_shengke["我生行(泄)"]]["red_balls"]))
-                # 出生日柱干支
-                b_liuzhu_red = set()
-                b_liuzhu_red.update(_TIANGAN_MAP[b_day_gan]["red_balls"])
-                b_liuzhu_red.update(_DIZHI_RED_MAP[b_day_zhi]["red_balls"])
-                b_liuzhu_blue = {_DIZHI_BLUE_MAP[b_day_zhi]}
-                _count_dim("🎂出生日柱", b_liuzhu_red, b_liuzhu_blue)
-            except:
-                pass  # birthday参数错误时静默忽略
-
     # 计算命中率
     results = []
+
     for dim_name, stats in dim_stats.items():
         if stats["red_total"] == 0:
             continue
@@ -3307,7 +2619,7 @@ async def _run_backtest(data, periods, mode, birthday=""):
         elif red_lift < -2:
             verdict = "❌负面"
         else:
-            verdict = "⚠️中性"
+            verdict = "⚖️中性"
 
         results.append({
             "dimension": dim_name,
@@ -3326,7 +2638,7 @@ async def _run_backtest(data, periods, mode, birthday=""):
 
     # 格式化输出
     lines = [f"【双色球玄学维度回测验证（近{periods}期，模式={mode}）】", ""]
-    lines.append(f"基准：红球随机命中率≈{round(6 / 33 * 100, 2)}%/球，蓝球随机命中率≈{round(1 / 16 * 100, 2)}%")
+    lines.append(f"基准：红球随机命中率≈{round(6/33*100,2)}%/球，蓝球随机命中率≈{round(1/16*100,2)}%")
     lines.append(f"提升值=实际命中率-期望命中率，>0=优于随机，<0=劣于随机")
     lines.append("")
     lines.append(f"{'维度':<10} {'红球命中':>8} {'红球命中率':>8} {'期望率':>6} {'提升':>6} {'蓝球命中率':>8} {'蓝球提升':>6} {'判定'}")
@@ -3354,226 +2666,14 @@ async def _run_backtest(data, periods, mode, birthday=""):
     }
 
 
-def _compare_backtest_modes(results_all, periods):
-    """
-    对比三种模式的回测结果，生成formatted输出和推荐
-    """
-    mode_scores = {}
-    for mode, result in results_all.items():
-        details = result.get("details", [])
-        red_lift_sum = sum(d["red_lift"] for d in details)
-        blue_lift_sum = sum(d["blue_lift"] for d in details if d["blue_total"] > 0)
-        valid_count = sum(1 for d in details if d["verdict"] == "✅有效")
-        negative_count = sum(1 for d in details if d["verdict"] == "❌负面")
-        mode_scores[mode] = {
-            "red_lift_sum": red_lift_sum,
-            "blue_lift_sum": blue_lift_sum,
-            "valid_count": valid_count,
-            "negative_count": negative_count,
-            "score": red_lift_sum + blue_lift_sum * 0.5,
-        }
-
-    sorted_modes = sorted(mode_scores.items(), key=lambda x: x[1]["score"], reverse=True)
-    best_mode = sorted_modes[0][0]
-    best_score = sorted_modes[0][1]
-
-    lines = [f"【多模式回测对比（近{periods}期）】", ""]
-    lines.append(f"{'模式':<12} {'红球提升∑':>10} {'蓝球提升∑':>10} {'有效维度':>8} {'负面维度':>8} {'综合得分':>8}")
-    lines.append("-" * 70)
-
-    mode_names = {"day_gan": "日干模式", "day_zhi": "日支模式", "majority": "六柱众数"}
-    for mode, scores in sorted_modes:
-        lines.append(
-            f"{mode_names.get(mode, mode):<12} "
-            f"{scores['red_lift_sum']:>+8}% "
-            f"{scores['blue_lift_sum']:>+8}% "
-            f"{scores['valid_count']:>6}个 "
-            f"{scores['negative_count']:>6}个 "
-            f"{scores['score']:>+7.2f}"
-        )
-
-    lines.append("")
-    lines.append(f"🏆 推荐模式：{mode_names.get(best_mode, best_mode)}")
-    lines.append(f"   综合得分最高（{best_score['score']:+.2f}），红球提升∑{best_score['red_lift_sum']:+.2f}%，有效维度{best_score['valid_count']}个")
-
-    lines.append("")
-    lines.append("📊 各模式有效维度（提升值>2%）：")
-    for mode, result in results_all.items():
-        valid_dims = [d for d in result.get("details", []) if d["verdict"] == "✅有效"]
-        dim_str = "、".join([d["dimension"] for d in valid_dims]) if valid_dims else "无"
-        lines.append(f"  {mode_names.get(mode, mode)}：{dim_str}")
-
-    lines.append("")
-    lines.append("💡 使用建议：")
-    lines.append(f"  1. 在/ssq/pick接口中使用 mode={best_mode} 参数")
-    lines.append(f"  2. 融合选号将自动采用「{mode_names.get(best_mode, best_mode)}」的计算结果")
-
-    formatted = "\n".join(lines)
-
-    return {
-        "formatted": formatted,
-        "recommend_mode": best_mode,
-        "reason": f"综合得分最高（{best_score['score']:+.2f}），红球提升∑{best_score['red_lift_sum']:+.2f}%",
-    }
-
-@app.get("/ssq/adversarial", tags=["双色球历史数据"])
-async def ssq_adversarial(mode: str = "day_zhi", birthday: str = ""):
-    """
-    双色球玄学维度对抗验证（P19）
-
-    训练集(2020-2023) vs 测试集(2024-2025)回测对比，
-    验证各维度是否过拟合。如果测试集提升率大幅衰减→过拟合。
-    - **mode**: 旺行判定逻辑，默认day_zhi（v4.1推荐模式）
-    - **birthday**: 出生日期（YYYY-MM-DD），传入后额外验证出生维度
-
-    返回：训练集/测试集各维度命中率+提升值+衰减率+过拟合判定
-    """
-    if not _SSQ_HISTORY:
-        raise HTTPException(status_code=503, detail="历史数据未加载")
-
-    # 按日期拆分训练集和测试集
-    train_data = [r for r in _SSQ_HISTORY if r.get("date") and "2020" <= r["date"][:4] <= "2023"]
-    test_data = [r for r in _SSQ_HISTORY if r.get("date") and "2024" <= r["date"][:4] <= "2025"]
-
-    if not train_data or not test_data:
-        raise HTTPException(status_code=504, detail="训练集或测试集数据不足")
-
-    # 分别跑回测
-    train_result = await _run_backtest(train_data, len(train_data), mode, birthday)
-    test_result = await _run_backtest(test_data, len(test_data), mode, birthday)
-
-    train_details = {d["dimension"]: d for d in train_result["details"]}
-    test_details = {d["dimension"]: d for d in test_result["details"]}
-
-    # 对比分析
-    comparison = []
-    lines = [
-        "【双色球玄学维度对抗验证（P19）】",
-        "",
-        f"训练集：2020-2023（{len(train_data)}期）",
-        f"测试集：2024-2025（{len(test_data)}期）",
-        f"旺行模式：{mode}",
-        "",
-        "对比逻辑：训练集提升率 → 测试集提升率 → 衰减率 → 过拟合判定",
-        "衰减率 = (训练提升 - 测试提升) / |训练提升| × 100%",
-        "判定标准：衰减<30%→✅稳健 | 30-60%→⚠️衰减 | 60-100%→❌严重衰减 | >100%→💀过拟合",
-        "",
-    ]
-
-    lines.append(f"{'维度':<12} {'训练提升':>8} {'测试提升':>8} {'衰减率':>8} {'判定'}")
-    lines.append("-" * 65)
-
-    for dim_name in train_details:
-        if dim_name not in test_details:
-            continue
-        t = train_details[dim_name]
-        v = test_details[dim_name]
-
-        t_lift = t["red_lift"]
-        v_lift = v["red_lift"]
-
-        # 衰减率计算（仅对训练集有正向信号的维度有意义）
-        if abs(t_lift) > 0.5:
-            decay_rate = round((t_lift - v_lift) / abs(t_lift) * 100, 1)
-        else:
-            decay_rate = 0.0
-
-        # 过拟合判定（核心逻辑：训练集正信号→测试集是否保持）
-        if abs(t_lift) <= 0.5 and abs(v_lift) <= 0.5:
-            verdict = "➖无信号"
-        elif t_lift > 0.5:
-            # 训练集有正信号 → 检查测试集是否保持
-            if v_lift > 2:
-                verdict = "✅稳健(测试集仍有效)"
-            elif v_lift > 0.5:
-                if decay_rate < 60:
-                    verdict = "✅稳健"
-                else:
-                    verdict = "⚠️衰减"
-            elif v_lift > -0.5:
-                verdict = "❌严重衰减"
-            elif t_lift * v_lift < 0:
-                verdict = "💀过拟合"
-            else:
-                verdict = "💀过拟合"
-        elif t_lift < -0.5:
-            # 训练集负信号 → 测试集方向变化
-            if v_lift > 0.5:
-                verdict = "🔄反转(负面→正面)"  # 好事！
-            elif abs(v_lift) < abs(t_lift):
-                verdict = "🔄减弱(负面减轻)"  # 好事！
-            else:
-                verdict = "❌持续负面"
-        else:
-            verdict = "➖无信号"
-
-        comparison.append({
-            "dimension": dim_name,
-            "train_red_lift": t_lift,
-            "test_red_lift": v_lift,
-            "decay_rate": decay_rate,
-            "train_verdict": t["verdict"],
-            "test_verdict": v["verdict"],
-            "overfit_verdict": verdict,
-        })
-
-        lines.append(
-            f"{dim_name:<12} {t_lift:>+7.2f}% {v_lift:>+7.2f}% {decay_rate:>+7.1f}% {verdict}"
-        )
-
-    # 汇总统计
-    robust_count = sum(1 for c in comparison if "稳健" in c["overfit_verdict"])
-    decay_count = sum(1 for c in comparison if c["overfit_verdict"] == "⚠️衰减")
-    severe_count = sum(1 for c in comparison if c["overfit_verdict"] in ("❌严重衰减", "💀过拟合"))
-    neutral_count = sum(1 for c in comparison if c["overfit_verdict"] == "➖无信号")
-    reverse_count = sum(1 for c in comparison if "反转" in c["overfit_verdict"] or "减弱" in c["overfit_verdict"])
-
-    # 有效维度在测试集中的表现
-    test_effective = [c for c in comparison if c["test_red_lift"] > 2]
-
-    lines.append("")
-    lines.append("━" * 65)
-    lines.append(f"📊 汇总：稳健{robust_count} | 衰减{decay_count} | 严重/过拟合{severe_count} | 无信号{neutral_count} | 反转/减弱{reverse_count}")
-    lines.append(f"📊 训练集有效维度(>2%)：{sum(1 for c in comparison if c['train_red_lift']>2)}个")
-    lines.append(f"📊 测试集有效维度(>2%)：{len(test_effective)}个")
-    if test_effective:
-        lines.append(f"📊 测试集仍有效维度：{', '.join(c['dimension'] for c in test_effective)}")
-    lines.append("")
-    lines.append("💡 结论：")
-    if len(test_effective) >= 3:
-        lines.append(f"  ✅ {len(test_effective)}个维度在测试集仍有效，v4.1融合策略具备泛化能力")
-    elif len(test_effective) >= 1:
-        lines.append(f"  ⚠️ 仅{len(test_effective)}个维度在测试集仍有效，部分维度可能过拟合")
-    else:
-        lines.append(f"  ❌ 无维度在测试集仍有效，v4.1策略可能严重过拟合，需重新评估")
-    lines.append("")
-    lines.append("💡 使用建议：")
-    lines.append("  1. 稳健维度→可信赖 | 衰减维度→降低权重 | 过拟合维度→考虑移除")
-    lines.append("  2. 对抗验证是P17贝叶斯融合的先验可靠性依据")
-
-    formatted_adversarial = "\n".join(lines)
-
-    return {
-        "train_periods": len(train_data),
-        "test_periods": len(test_data),
-        "mode": mode,
-        "comparison": comparison,
-        "formatted_adversarial": formatted_adversarial,
-    }
-
-
 @app.get("/ssq/pick", tags=["双色球历史数据"])
-async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday: str = ""):
+async def ssq_pick(date: str = "", mode: str = "day_gan", count: int = 5):
     """
     双色球融合选号接口（玄学+统计）
 
     基于回测验证的有效维度+历史统计，融合生成推荐号码组合。
     - **date**: 公历日期（YYYY-MM-DD），默认今天
-    - **mode**: 旺行判定逻辑，可选：
-      - auto（默认）：自动推荐最优模式
-      - day_gan：日柱天干五行
-      - day_zhi：日柱地支五行
-      - majority：六柱综合众数
+    - **mode**: 旺行判定逻辑，同/ganzhi
     - **count**: 生成几注，默认5，最大10
 
     选号逻辑：
@@ -3589,8 +2689,8 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
 
     if not _SSQ_HISTORY:
         raise HTTPException(status_code=503, detail="历史数据未加载")
-    if mode not in ("day_gan", "day_zhi", "majority", "auto"):
-        raise HTTPException(status_code=400, detail="mode参数错误，可选：day_gan / day_zhi / majority / auto")
+    if mode not in ("day_gan", "day_zhi", "majority"):
+        raise HTTPException(status_code=400, detail="mode参数错误")
     count = min(max(count, 1), 10)
 
     # 日期处理
@@ -3633,26 +2733,6 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
         _TIANGAN_MAP[day_gan]["wuxing"], _DIZHI_RED_MAP[day_zhi]["wuxing"],
     ]
     wx_counter = Counter(six_wx)
-
-    # v3.5: auto模式自动推荐（基于六柱五行分布+回测结论）
-    auto_reason = ""
-    if mode == "auto":
-        top_wx, top_count = wx_counter.most_common(1)[0]
-        day_gan_wx = _TIANGAN_MAP[day_gan]["wuxing"]
-        day_zhi_wx = _DIZHI_RED_MAP[day_zhi]["wuxing"]
-        if top_count >= 4:
-            # 众数五行出现4+次，majority更有效（生我行+7.86%）
-            mode = "majority"
-            auto_reason = f"auto→majority：六柱众数{top_wx}出现{top_count}次(≥4)，majority生我行+7.86%"
-        elif day_zhi_wx != day_gan_wx and top_count >= 3:
-            # 众数3次且日干支五行不同，day_zhi蓝球克我行+13.08%最有效
-            mode = "day_zhi"
-            auto_reason = f"auto→day_zhi：众数{top_wx}出现{top_count}次，日干({day_gan_wx})≠日支({day_zhi_wx})，day_zhi蓝球克我行+13.08%"
-        else:
-            # 默认day_gan，红球生我行+6.57%稳定有效
-            mode = "day_gan"
-            auto_reason = f"auto→day_gan：六柱分散(众数{top_wx}仅{top_count}次)，day_gan生我行+6.57%稳定"
-
     if mode == "day_zhi":
         day_wuxing = _DIZHI_RED_MAP[day_zhi]["wuxing"]
     elif mode == "majority":
@@ -3663,348 +2743,148 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
     shengke = _get_shengke_info(day_wuxing)
 
     # 玄学红球候选池（基于回测有效维度，日月已移除-负面）
-    # 自适应权重配置v3.5（基于2144期全量回测，改此处即全局生效）
-    # 按模式分组：day_gan用生我行，day_zhi用克我行+我生行·泄
-    BACKTEST_WEIGHTS = {
-        "day_gan": {
-            "六柱干支": 3,    # 提升+15.05%，最有效维度
-            "生我行":   2,    # 提升+6.57%
-            "纳音五行": 2,    # 提升+5.53%
-            "飞星":     2,    # 红球+0.73%中性偏正，提升覆盖
-            "旺行":     0,    # 红球-5.24%负面，降权至0
-            "克我行":   0,    # 红球-0.73%中性偏负
-        },
-        "day_zhi": {
-            "六柱干支": 3,    # 提升+15.05%，最有效维度
-            "我生行·泄": 2,   # 提升+5.28%
-            "纳音五行": 2,    # 提升+5.53%
-            "克我行":   2,    # 红球+3.54%✅，蓝球+13.08%✅ 提升×1→×2
-            "飞星":     2,    # 红球+0.73%中性偏正，提升覆盖
-            "旺行":     0,    # 红球+0.44%中性，蓝球+11.53%有效但红球弱
-            "生我行":   0,    # 红球-2.21%负面，蓝球-23.55%大幅负面
-        },
-        "majority": {
-            "六柱干支": 3,    # 提升+15.05%，最有效维度
-            "生我行":   2,    # 提升+7.86%
-            "纳音五行": 2,    # 提升+5.53%
-            "飞星":     2,    # 红球+0.73%中性偏正，提升覆盖
-            "旺行":     0,    # 红球-3.43%负面
-            "我克行":   0,    # 红球-3.76%负面
-        },
-    }
-    _weights = BACKTEST_WEIGHTS.get(mode, BACKTEST_WEIGHTS["day_gan"])
-    _weight_str = " / ".join(f"{k}×{v}" for k,v in _weights.items() if v > 0)
-
-    # 蓝球独立权重v3.5（基于2144期全量回测）
-    # 红球用_weights，蓝球用_weights_blue
-    BACKTEST_WEIGHTS_BLUE = {
-        "day_gan": {
-            "六柱干支": 2,    # 蓝球+1.41%弱有效
-            "生我行":   0,    # 蓝球-5.62%负面！降权至0
-            "纳音五行": 0,    # 蓝球-0.97%中性偏负
-            "飞星":     1,    # 蓝球+0.73%中性
-            "旺行":     1,    # 蓝球+8.43%有效！
-            "克我行":   1,    # 蓝球+6.88%有效！v3.5新增（红球-0.73%但蓝球有效）
-            "我生行·泄": 0,   # 蓝球无数据
-        },
-        "day_zhi": {
-            "六柱干支": 1,    # 蓝球+1.41%弱有效
-            "生我行":   0,    # 蓝球-23.55%大幅负面！必须降权
-            "纳音五行": 0,    # 蓝球-0.97%中性偏负
-            "克我行":   3,    # 蓝球+13.08%最有效！最高权重
-            "我生行·泄": 0,   # 蓝球无数据
-            "飞星":     1,    # 蓝球+0.73%中性
-            "旺行":     2,    # 蓝球+11.53%有效！
-        },
-        "majority": {
-            "六柱干支": 2,    # 蓝球+1.41%弱有效
-            "生我行":   0,    # 蓝球-6.4%负面
-            "纳音五行": 0,    # 蓝球-0.97%中性偏负
-            "飞星":     1,    # 蓝球+0.73%中性
-            "旺行":     1,    # 蓝球+3.78%弱有效
-            "我克行":   0,    # 蓝球无数据
-        },
-    }
-    _weights_blue = BACKTEST_WEIGHTS_BLUE.get(mode, BACKTEST_WEIGHTS_BLUE["day_gan"])
-
+    # 权重基于2144期回测提升值：六柱干支+15.05%，生我行+6.57%，纳音五行+5.53%
     xuanxue_red_score = {}
     xuanxue_blue_score = {}
 
-    # 有效维度1：六柱干支（权重由BACKTEST_WEIGHTS配置）
+    # 有效维度1：六柱干支（权重3，最有效）
     for tg, dz in [(year_gan, year_zhi), (month_gan, month_zhi), (day_gan, day_zhi)]:
         for n in _TIANGAN_MAP[tg]["red_balls"]:
-            xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + _weights["六柱干支"]
+            xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 3
         for n in _DIZHI_RED_MAP[dz]["red_balls"]:
-            xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + _weights["六柱干支"]
+            xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 3
         b = _DIZHI_BLUE_MAP[dz]
-        xuanxue_blue_score[b] = xuanxue_blue_score.get(b, 0) + _weights_blue["六柱干支"]
+        xuanxue_blue_score[b] = xuanxue_blue_score.get(b, 0) + 3
 
-    # 有效维度2：生我行（权重由_weights配置，day_zhi模式下降权至0）
+    # 有效维度2：生我行（权重2）
     for n in _WUXING_MAP[shengke["生我行"]]["red_balls"]:
-        xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + _weights["生我行"]
+        xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 2
     for n in _WUXING_MAP[shengke["生我行"]]["blue_balls"]:
-        xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + _weights_blue["生我行"]
+        xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + 2
 
-    # 有效维度2b：克我行（day_zhi模式红球+3.54%，蓝球+13.08%显著有效）
-    for n in _WUXING_MAP[shengke["克我行"]]["red_balls"]:
-        xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + _weights.get("克我行", 0)
-    for n in _WUXING_MAP[shengke["克我行"]]["blue_balls"]:
-        xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + _weights_blue.get("克我行", 0)
-
-    # 有效维度2c：我生行·泄（day_zhi模式红球+5.28%有效）
-    for n in _WUXING_MAP[shengke["我生行(泄)"]]["red_balls"]:
-        xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + _weights.get("我生行·泄", 0)
-    for n in _WUXING_MAP[shengke["我生行(泄)"]]["blue_balls"]:
-        xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + _weights_blue.get("我生行·泄", 0)
-
-    # 有效维度3：纳音五行（权重由BACKTEST_WEIGHTS配置）
+    # 有效维度3：纳音五行（权重2）
     day_ganzhi = day_gan + day_zhi
     day_nayin = _NAYIN_MAP.get(day_ganzhi, "")
     nayin_wuxing = _NAYIN_WUXING.get(day_nayin, "")
     if nayin_wuxing:
         for n in _WUXING_MAP[nayin_wuxing]["red_balls"]:
-            xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + _weights["纳音五行"]
+            xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 2
         for n in _WUXING_MAP[nayin_wuxing]["blue_balls"]:
-            xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + _weights_blue["纳音五行"]
+            xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + 2
 
-    # 中性维度：旺行（权重由BACKTEST_WEIGHTS配置，当前降权至0）
+    # 中性维度：旺行（权重1，回测中性偏负但蓝球有效）
     for n in _WUXING_MAP[shengke["旺行"]]["red_balls"]:
-        xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + _weights["旺行"]
+        xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 1
     for n in _WUXING_MAP[shengke["旺行"]]["blue_balls"]:
-        xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + _weights_blue["旺行"]
+        xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + 1
 
-    # 中性维度：飞星方位（权重由BACKTEST_WEIGHTS配置）
+    # 中性维度：飞星方位（权重1）
     bagua = _DIZHI_BAGUA_MAP.get(day_zhi, {})
     if bagua:
         for n in bagua["red_balls"]:
-            xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + _weights["飞星"]
+            xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 1
         for n in bagua["blue_balls"]:
-            xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + _weights_blue["飞星"]
+            xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + 1
 
-    # ===== v3.5 出生维度（可选，权重基于回测） =====
-    b_day_gan_p = b_day_zhi_p = b_day_wuxing_p = b_shengke_p = None
-    birth_weight_str = ""
-    if birthday:
-        try:
-            b_parts = birthday.split('-')
-            b_date_p = date_cls(int(b_parts[0]), int(b_parts[1]), int(b_parts[2]))
-            b_diff_p = (b_date_p - base_date).days
-            b_day_gan_p = _TL[b_diff_p % 10]
-            b_day_zhi_p = _DZ[b_diff_p % 12]
-            b_day_wuxing_p = _TIANGAN_MAP[b_day_gan_p]["wuxing"]
-            b_shengke_p = _get_shengke_info(b_day_wuxing_p)
-            # v3.5 出生维度权重（基于2144期回测：生我行+3.03%有效，克我行-3.25%负面）
-            BIRTH_WEIGHTS = {"旺行": 1, "生我行": 2, "克我行": 0, "我生行·泄": 0}
-            BIRTH_WEIGHTS_BLUE = {"旺行": 1, "克我行": 0, "生我行": 1, "我生行·泄": 0}
-            # 红球
-            for n in _WUXING_MAP[b_shengke_p["旺行"]]["red_balls"]:
-                xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + BIRTH_WEIGHTS["旺行"]
-            for n in _WUXING_MAP[b_shengke_p["生我行"]]["red_balls"]:
-                xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + BIRTH_WEIGHTS["生我行"]
-            for n in _WUXING_MAP[b_shengke_p["克我行"]]["red_balls"]:
-                xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + BIRTH_WEIGHTS["克我行"]
-            for n in _WUXING_MAP[b_shengke_p["我生行(泄)"]]["red_balls"]:
-                xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + BIRTH_WEIGHTS["我生行·泄"]
-            for n in _TIANGAN_MAP[b_day_gan_p]["red_balls"]:
-                xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 1
-            for n in _DIZHI_RED_MAP[b_day_zhi_p]["red_balls"]:
-                xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + 1
-            # 蓝球
-            for n in _WUXING_MAP[b_shengke_p["旺行"]]["blue_balls"]:
-                xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + BIRTH_WEIGHTS_BLUE["旺行"]
-            for n in _WUXING_MAP[b_shengke_p["生我行"]]["blue_balls"]:
-                xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + BIRTH_WEIGHTS_BLUE["生我行"]
-            for n in _WUXING_MAP[b_shengke_p["克我行"]]["blue_balls"]:
-                xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + BIRTH_WEIGHTS_BLUE["克我行"]
-            xuanxue_blue_score[_DIZHI_BLUE_MAP[b_day_zhi_p]] = xuanxue_blue_score.get(_DIZHI_BLUE_MAP[b_day_zhi_p], 0) + 1
-            birth_weight_str = f"出生({b_day_gan_p}{b_day_zhi_p}日·{b_day_wuxing_p}行) 旺行×1/生我×2/克我×0/泄×0"
-        except:
-            pass  # birthday参数错误时静默忽略，不影响主流程
-
-    # ===== 第二步：v4.1统计引擎升级（马尔可夫+衰减+关联规则+冷热周期+自适应权重）=====
-    stat_periods = min(100, len(_SSQ_HISTORY))  # v4.0: 扩大到100期（原50期）
+    # ===== 第二步：历史统计加权 =====
+    stat_periods = min(50, len(_SSQ_HISTORY))
     stat_data = _SSQ_HISTORY[:stat_periods]
 
-    # --- 引擎1: 衰减记忆加权频率（替代原等权频率） ---
-    decay_freq_red = _decay_weighted_stats(stat_data, "red", decay=0.95)
-    decay_freq_blue = _decay_weighted_stats(stat_data, "blue", decay=0.95)
+    red_freq = {i: 0 for i in range(1, 34)}
+    blue_freq = {i: 0 for i in range(1, 17)}
+    red_miss = {i: 0 for i in range(1, 34)}
+    blue_miss = {i: 0 for i in range(1, 17)}
 
-    # --- 引擎1b: 衰减遗漏值（替代原等权遗漏） ---
-    decay_miss_red = _decay_miss_with_weight(stat_data, "red", decay=0.95)
-    decay_miss_blue = _decay_miss_with_weight(stat_data, "blue", decay=0.95)
+    for rec in stat_data:
+        for n in rec["red"]:
+            red_freq[n] += 1
+        blue_freq[rec["blue"]] += 1
 
-    # --- 引擎2: 马尔可夫链转移预测 ---
-    markov_trans_red = _markov_transition(stat_data, "red")
-    markov_trans_blue = _markov_transition(stat_data, "blue")
-    last_red = _SSQ_HISTORY[0]["red"]  # 最新一期红球
-    last_blue = [_SSQ_HISTORY[0]["blue"]]  # 最新一期蓝球
-    markov_pred_red = _markov_predict(markov_trans_red, last_red, "red")
-    markov_pred_blue = _markov_predict(markov_trans_blue, last_blue, "blue")
+    # 遗漏值
+    for num in range(1, 34):
+        for rec in stat_data:
+            if num in rec["red"]:
+                break
+            red_miss[num] += 1
+    for num in range(1, 17):
+        for rec in stat_data:
+            if num == rec["blue"]:
+                break
+            blue_miss[num] += 1
 
-    # --- 引擎3: 关联规则预测 ---
-    assoc_rules_red = _association_rules(stat_data, "red", min_support=0.03, min_confidence=0.12)
-    assoc_rules_blue = _association_rules(stat_data, "blue", min_support=0.02, min_confidence=0.08)
-    assoc_pred_red = _association_predict(assoc_rules_red, last_red, "red")
-    assoc_pred_blue = _association_predict(assoc_rules_blue, last_red, "blue")  # 蓝球用上一期红球作前件
-
-    # --- v4.1 P8: 自适应引擎权重（基于近30期命中率动态调整） ---
-    adaptive_weights = _adaptive_engine_weights(_SSQ_HISTORY, window=30)
-    STAT_ENGINE_WEIGHTS = adaptive_weights
-    _stat_weight_str = " / ".join(f"{k}×{int(v*100)}%" for k, v in STAT_ENGINE_WEIGHTS.items())
-
+    # 统计分数（频率权重+遗漏权重）
     stat_red_score = {}
     stat_blue_score = {}
+    max_rf = max(red_freq.values()) if red_freq.values() else 1
+    max_rm = max(red_miss.values()) if red_miss.values() else 1
+    max_bf = max(blue_freq.values()) if blue_freq.values() else 1
+    max_bm = max(blue_miss.values()) if blue_miss.values() else 1
+
     for n in range(1, 34):
-        stat_red_score[n] = (
-            decay_freq_red.get(n, 0) * STAT_ENGINE_WEIGHTS["decay_freq"] +
-            decay_miss_red.get(n, 0) * STAT_ENGINE_WEIGHTS["decay_miss"] +
-            markov_pred_red.get(n, 0) * STAT_ENGINE_WEIGHTS["markov"] +
-            assoc_pred_red.get(n, 0) * STAT_ENGINE_WEIGHTS["association"]
-        )
+        # 频率归一化 + 遗漏归一化
+        freq_score = red_freq[n] / max_rf  # 0-1
+        miss_score = red_miss[n] / max_rm  # 0-1，遗漏越大越可能出
+        stat_red_score[n] = freq_score * 0.6 + miss_score * 0.4  # 频率6:遗漏4
+
     for n in range(1, 17):
-        stat_blue_score[n] = (
-            decay_freq_blue.get(n, 0) * STAT_ENGINE_WEIGHTS["decay_freq"] +
-            decay_miss_blue.get(n, 0) * STAT_ENGINE_WEIGHTS["decay_miss"] +
-            markov_pred_blue.get(n, 0) * STAT_ENGINE_WEIGHTS["markov"] +
-            assoc_pred_blue.get(n, 0) * STAT_ENGINE_WEIGHTS["association"]
-        )
+        freq_score = blue_freq[n] / max_bf
+        miss_score = blue_miss[n] / max_bm
+        stat_blue_score[n] = freq_score * 0.6 + miss_score * 0.4
 
-    # --- v4.1 P4: 冷热周期识别 ---
-    hot_cold_red = _hot_cold_cycle(stat_data, "red", window=10)
-    hot_cold_blue = _hot_cold_cycle(stat_data, "blue", window=10)
-
-    # ===== 第三步：融合评分（v4.1: +冷热周期+交叉验证）=====
-    # v3.5: 冷门号保底分（玄学0分的号码给0.5基础分，避免完全排除）
-    _COLD_FLOOR = 0.5
-
-    # v4.1 P7: 玄学统计交叉验证
-    # 玄学TOP9（前1/3）和统计TOP9重合的号码，给额外交叉加权
-    xuanxue_top9 = set(sorted(xuanxue_red_score, key=xuanxue_red_score.get, reverse=True)[:9])
-    stat_top9 = set(sorted(stat_red_score, key=stat_red_score.get, reverse=True)[:9])
-    cross_red = xuanxue_top9 & stat_top9  # 交集号码
-
-    xuanxue_blue_top3 = set(sorted(xuanxue_blue_score, key=xuanxue_blue_score.get, reverse=True)[:3])
-    stat_blue_top3 = set(sorted(stat_blue_score, key=stat_blue_score.get, reverse=True)[:3])
-    cross_blue = xuanxue_blue_top3 & stat_blue_top3
-
-    _CROSS_BONUS = 1.5  # 交叉验证额外加分
-
+    # ===== 第三步：融合评分 =====
     final_red_score = {}
-    cross_red_marks = {}  # 记录交叉验证标记
     for n in range(1, 34):
         x_score = xuanxue_red_score.get(n, 0)
         s_score = stat_red_score.get(n, 0) * 5  # 统计分归一化到0-5
-        # 冷门号保底：玄学得分为0但有统计数据的号码，给基础分
-        floor = _COLD_FLOOR if x_score == 0 and s_score > 0 else 0
-        # P4: 冷热周期加分
-        hc_score = hot_cold_red[n]["score"] * 1.0  # 冷热周期0-1分，加权1.0
-        # P7: 交叉验证加分
-        cross = _CROSS_BONUS if n in cross_red else 0
-        cross_red_marks[n] = "🔥交叉" if n in cross_red else ""
-        final_red_score[n] = x_score + s_score + floor + hc_score + cross
+        final_red_score[n] = x_score + s_score  # 玄学权重+统计权重
 
     final_blue_score = {}
     for n in range(1, 17):
         x_score = xuanxue_blue_score.get(n, 0)
         s_score = stat_blue_score.get(n, 0) * 5
-        floor = _COLD_FLOOR if x_score == 0 and s_score > 0 else 0
-        hc_score = hot_cold_blue[n]["score"] * 1.0
-        cross = _CROSS_BONUS if n in cross_blue else 0
-        final_blue_score[n] = x_score + s_score + floor + hc_score + cross
+        final_blue_score[n] = x_score + s_score
 
     # 红球排序
     sorted_red = sorted(final_red_score.items(), key=lambda x: (-x[1], x[0]))
     # 蓝球排序
     sorted_blue = sorted(final_blue_score.items(), key=lambda x: (-x[1], x[0]))
 
-    # ===== 第四步：生成号码组合（统计约束优化）=====
+    # ===== 第四步：生成号码组合 =====
     # 红球候选池：取TOP18
     red_pool = [n for n, _ in sorted_red[:18]]
     # 蓝球候选池：取TOP6
     blue_pool = [n for n, _ in sorted_blue[:6]]
 
-    # 统计约束基准（近50期）
-    _target_sum = (90, 120)       # 和值最优区间
-    _good_odd = (2, 4)            # 奇数个数合理范围（3:3最优）
-    _good_big = (2, 4)            # 大号个数合理范围（3:3最优）
-    _min_zone = 1                 # 每区至少出1个
+    combinations = []
+    random.seed(solar_date.toordinal())  # 日期固定种子，同一天结果一致
 
-    random.seed(solar_date.toordinal())  # 日期固定种子
+    for i in range(count):
+        # 从候选池中选6红1蓝
+        # 加点随机性，但偏向高分号
+        weights_red = [final_red_score[n] + 1 for n in red_pool]
+        total_w = sum(weights_red)
+        probs = [w / total_w for w in weights_red]
 
-    def _combo_score(red6, blue):
-        """组合质量评分：越高越均衡"""
-        s = sum(red6)
-        odd = sum(1 for n in red6 if n % 2 == 1)
-        big = sum(1 for n in red6 if n >= 17)
-        z1 = sum(1 for n in red6 if n <= 11)
-        z2 = sum(1 for n in red6 if 12 <= n <= 22)
-        z3 = sum(1 for n in red6 if n >= 23)
-        score = 100.0
-
-        # 和值约束（和值在90-120最优，偏离扣分）
-        if s < _target_sum[0]:
-            score -= (_target_sum[0] - s) * 2
-        elif s > _target_sum[1]:
-            score -= (s - _target_sum[1]) * 2
-
-        # 奇偶约束（3:3最优=0扣分，4:2或2:4扣5分，5:1或1:5扣15分，6:0或0:6扣30分）
-        if odd in (3,):  pass  # 3:3 完美
-        elif odd in (2, 4):  score -= 5
-        elif odd in (1, 5):  score -= 15
-        else:  score -= 30
-
-        # 大小约束（同理）
-        if big in (3,):  pass
-        elif big in (2, 4):  score -= 5
-        elif big in (1, 5):  score -= 15
-        else:  score -= 30
-
-        # 区间约束（三区均出加分，某区0个扣分）
-        zones = [z1, z2, z3]
-        if all(z >= _min_zone for z in zones):
-            score += 10  # 三区均出加分
-        else:
-            empty_zones = sum(1 for z in zones if z == 0)
-            score -= empty_zones * 15
-
-        # 玄学得分加成
-        red_xuanxue = sum(final_red_score[n] for n in red6)
-        score += red_xuanxue * 0.5
-
-        # 蓝球得分加成
-        score += final_blue_score.get(blue, 0) * 0.3
-
-        return score
-
-    # 生成大量候选组合，评分后取最优
-    _candidates = []
-    weights_red = [final_red_score[n] + 1 for n in red_pool]
-    weights_blue = [final_blue_score[n] + 1 for n in blue_pool]
-
-    for _ in range(count * 50):  # 生成50倍候选
-        # 加权随机选6红
+        # 加权随机选6个红球（不重复）
         chosen_red = []
-        pool_nums = list(red_pool)
-        pool_weights = list(weights_red)
+        pool = list(zip(red_pool, probs))
         for _ in range(6):
-            if not pool_nums:
-                break
-            s = sum(pool_weights)
-            probs = [w / s for w in pool_weights] if s > 0 else [1/len(pool_weights)] * len(pool_weights)
-            chosen = random.choices(pool_nums, weights=probs, k=1)[0]
+            nums = [p[0] for p in pool]
+            ps = [p[1] for p in pool]
+            # 归一化
+            s = sum(ps)
+            ps = [p / s for p in ps]
+            chosen = random.choices(nums, weights=ps, k=1)[0]
             chosen_red.append(chosen)
-            idx = pool_nums.index(chosen)
-            pool_nums.pop(idx)
-            pool_weights.pop(idx)
+            pool = [(n, p) for n, p in pool if n != chosen]
 
         chosen_red = sorted(chosen_red)
 
         # 蓝球加权随机
+        weights_blue = [final_blue_score[n] + 1 for n in blue_pool]
         chosen_blue = random.choices(blue_pool, weights=weights_blue, k=1)[0]
 
-        # 计算组合质量分
-        c_score = _combo_score(chosen_red, chosen_blue)
-
+        # 组合验证
         sum_val = sum(chosen_red)
         odd = sum(1 for n in chosen_red if n % 2 == 1)
         big = sum(1 for n in chosen_red if n >= 17)
@@ -4012,67 +2892,21 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
         z2 = sum(1 for n in chosen_red if 12 <= n <= 22)
         z3 = sum(1 for n in chosen_red if n >= 23)
 
-        _candidates.append({
+        combinations.append({
             "red": chosen_red,
             "blue": chosen_blue,
             "sum": sum_val,
             "odd_even": f"{odd}:{6-odd}",
             "big_small": f"{big}:{6-big}",
             "zones": f"{z1}:{z2}:{z3}",
-            "_score": c_score,
         })
-
-    # 去重（按红球集合去重）
-    _seen = set()
-    _unique = []
-    for c in _candidates:
-        key = tuple(c["red"])
-        if key not in _seen:
-            _seen.add(key)
-            _unique.append(c)
-
-    # 按质量分排序，取TOP count
-    _unique.sort(key=lambda x: -x["_score"])
-    combinations = _unique[:count]
-    # 移除内部评分字段
-    for c in combinations:
-        c.pop("_score", None)
 
     # ===== 格式化输出 =====
     lines = [f"【双色球融合选号（{solar_date}）】", ""]
-    if auto_reason:
-        lines.append(f"💡 {auto_reason}")
-    lines.append(f"玄学有效维度权重（自适应·{mode}模式）：{_weight_str}")
-    lines.append(f"统计引擎v4.1自适应权重：{_stat_weight_str}")
-    _blue_weight_str = " / ".join(f"{k}×{v}" for k,v in _weights_blue.items() if v > 0)
-    if _blue_weight_str != _weight_str:
-        lines.append(f"蓝球独立权重：{_blue_weight_str}")
-    if birth_weight_str:
-        lines.append(f"🎂出生维度权重：{birth_weight_str}")
-
-    # v4.1 冷热周期摘要
-    cold_to_warm = sorted([n for n in range(1,34) if hot_cold_red[n]["turn"] == "冷→温↑"])
-    warm_to_hot = sorted([n for n in range(1,34) if hot_cold_red[n]["turn"] == "温→热↑"])
-    hot_stable = sorted([n for n in range(1,34) if hot_cold_red[n]["turn"] == "热→"])
-    hot_cooling = sorted([n for n in range(1,34) if hot_cold_red[n]["turn"] == "热→温↓"])
-    lines.append(f"🔥冷热周期：冷转热{' '.join(f'{n:02d}' for n in cold_to_warm[:5])} | 温转热{' '.join(f'{n:02d}' for n in warm_to_hot[:5])} | 稳定热{' '.join(f'{n:02d}' for n in hot_stable[:5])} | 热转冷{' '.join(f'{n:02d}' for n in hot_cooling[:5])}")
-
-    # v4.1 交叉验证号码
-    cross_nums = sorted(cross_red)
-    cross_blue_nums = sorted(cross_blue)
-    lines.append(f"🔥交叉验证：红球{' '.join(f'{n:02d}' for n in cross_nums)} | 蓝球{' '.join(f'{n:02d}' for n in cross_blue_nums)}")
-
-    # 红球TOP18带交叉标记
-    red_pool_marks = []
-    for n in red_pool:
-        mark = cross_red_marks.get(n, "")
-        red_pool_marks.append(f"{n:02d}({final_red_score[n]:.1f}){mark}")
-    lines.append(f"红球候选TOP18：{', '.join(red_pool_marks)}")
-    blue_pool_marks = []
-    for n in blue_pool:
-        bcross = "🔥" if n in cross_blue else ""
-        blue_pool_marks.append(f"{n:02d}({final_blue_score[n]:.1f}){bcross}")
-    lines.append(f"蓝球候选TOP6：{', '.join(blue_pool_marks)}")
+    lines.append(f"玄学有效维度权重：六柱干支×3 / 生我行×2 / 纳音五行×2 / 旺行×1 / 飞星×1")
+    lines.append(f"统计权重：频率60% + 遗漏40%")
+    lines.append(f"红球候选TOP18：{', '.join(f'{n:02d}({final_red_score[n]:.1f})' for n in red_pool)}")
+    lines.append(f"蓝球候选TOP6：{', '.join(f'{n:02d}({final_blue_score[n]:.1f})' for n in blue_pool)}")
     lines.append("")
 
     for i, combo in enumerate(combinations, 1):
@@ -4088,9 +2922,9 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
         "date": str(solar_date),
         "mode": mode,
         "formatted_pick": formatted_pick,
-        "combinations": json.dumps(combinations, ensure_ascii=False),
-        "red_pool_top18": json.dumps(red_pool, ensure_ascii=False),
-        "blue_pool_top6": json.dumps(blue_pool, ensure_ascii=False),
+        "combinations": combinations,
+        "red_pool_top18": red_pool,
+        "blue_pool_top6": blue_pool,
     }
 
 
