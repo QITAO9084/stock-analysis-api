@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -14,6 +15,20 @@ app = FastAPI(
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
     version="5.2.0"
 )
+
+# Coze兼容：/openapi.json/xxx → /xxx 路径重写
+class CozePathRewriteMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path.startswith("/openapi.json/"):
+            new_path = path[len("/openapi.json"):]  # 去掉 /openapi.json 前缀
+            # 构造新的URL scope
+            request.scope["path"] = new_path
+            request.scope["raw_path"] = new_path.encode()
+        response = await call_next(request)
+        return response
+
+app.add_middleware(CozePathRewriteMiddleware)
 
 # 允许跨域
 app.add_middleware(
