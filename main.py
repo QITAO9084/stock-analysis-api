@@ -2323,23 +2323,6 @@ async def ssq_history(limit: int = 30):
 
     - **limit**: 返回最近N期数据，默认30，最大200
     """
-    # 如果mode="all"，并行跑三种模式
-    if mode == "all":
-        results_all = {}
-        for m in ["day_gan", "day_zhi", "majority"]:
-            result = await _run_backtest(data, periods, m, birthday)
-            results_all[m] = result
-        # 对比三种模式，生成推荐
-        recommend = _compare_backtest_modes(results_all, periods)
-        return {
-            "periods_tested": periods,
-            "mode": "all",
-            "results_all": results_all,
-            "formatted_backtest_all": recommend["formatted"],
-            "recommend_mode": recommend["recommend_mode"],
-            "recommend_reason": recommend["reason"],
-        }
-
     if not _SSQ_HISTORY:
         raise HTTPException(status_code=503, detail="历史数据未加载")
     limit = min(limit, 200)
@@ -3942,9 +3925,9 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
         "date": str(solar_date),
         "mode": mode,
         "formatted_pick": formatted_pick,
-        "combinations": combinations,
-        "red_pool_top18": red_pool,
-        "blue_pool_top6": blue_pool,
+        "combinations": json.dumps(combinations, ensure_ascii=False),
+        "red_pool_top18": json.dumps(red_pool, ensure_ascii=False),
+        "blue_pool_top6": json.dumps(blue_pool, ensure_ascii=False),
     }
 
 
