@@ -1681,6 +1681,97 @@ def _get_year_feixing(year: int) -> int:
     star = (11 - (year % 9)) % 9
     return star if star != 0 else 9
 
+# ===== P16: 二十八宿映射表（宇宙维度）=====
+# 28宿按4象7宿排列，每宿对应五行属性
+# 值宿计算：儒略日 JD mod 28 → 宿索引
+_28XIU_MAP = [
+    # 东方青龙7宿
+    {"name": "角", "xiang": "青龙", "wuxing": "木", "animal": "蛟", "desc": "角木蛟"},
+    {"name": "亢", "xiang": "青龙", "wuxing": "金", "animal": "龙", "desc": "亢金龙"},
+    {"name": "氐", "xiang": "青龙", "wuxing": "土", "animal": "貉", "desc": "氐土貉"},
+    {"name": "房", "xiang": "青龙", "wuxing": "火", "animal": "兔", "desc": "房日兔"},
+    {"name": "心", "xiang": "青龙", "wuxing": "火", "animal": "狐", "desc": "心月狐"},
+    {"name": "尾", "xiang": "青龙", "wuxing": "火", "animal": "虎", "desc": "尾火虎"},
+    {"name": "箕", "xiang": "青龙", "wuxing": "水", "animal": "豹", "desc": "箕水豹"},
+    # 北方玄武7宿
+    {"name": "斗", "xiang": "玄武", "wuxing": "木", "animal": "獬", "desc": "斗木獬"},
+    {"name": "牛", "xiang": "玄武", "wuxing": "金", "animal": "牛", "desc": "牛金牛"},
+    {"name": "女", "xiang": "玄武", "wuxing": "土", "animal": "蝠", "desc": "女士蝠"},
+    {"name": "虚", "xiang": "玄武", "wuxing": "火", "animal": "鼠", "desc": "虚日鼠"},
+    {"name": "危", "xiang": "玄武", "wuxing": "火", "animal": "燕", "desc": "危月燕"},
+    {"name": "室", "xiang": "玄武", "wuxing": "火", "animal": "猪", "desc": "室火猪"},
+    {"name": "壁", "xiang": "玄武", "wuxing": "水", "animal": "貐", "desc": "壁水貐"},
+    # 西方白虎7宿
+    {"name": "奎", "xiang": "白虎", "wuxing": "木", "animal": "狼", "desc": "奎木狼"},
+    {"name": "娄", "xiang": "白虎", "wuxing": "金", "animal": "狗", "desc": "娄金狗"},
+    {"name": "胃", "xiang": "白虎", "wuxing": "土", "animal": "雉", "desc": "胃土雉"},
+    {"name": "昴", "xiang": "白虎", "wuxing": "火", "animal": "鸡", "desc": "昴日鸡"},
+    {"name": "毕", "xiang": "白虎", "wuxing": "火", "animal": "乌", "desc": "毕月乌"},
+    {"name": "觜", "xiang": "白虎", "wuxing": "火", "animal": "猴", "desc": "觜火猴"},
+    {"name": "参", "xiang": "白虎", "wuxing": "水", "animal": "猿", "desc": "参水猿"},
+    # 南方朱雀7宿
+    {"name": "井", "xiang": "朱雀", "wuxing": "木", "animal": "犴", "desc": "井木犴"},
+    {"name": "鬼", "xiang": "朱雀", "wuxing": "金", "animal": "羊", "desc": "鬼金羊"},
+    {"name": "柳", "xiang": "朱雀", "wuxing": "土", "animal": "獐", "desc": "柳土獐"},
+    {"name": "星", "xiang": "朱雀", "wuxing": "火", "animal": "马", "desc": "星日马"},
+    {"name": "张", "xiang": "朱雀", "wuxing": "火", "animal": "鹿", "desc": "张月鹿"},
+    {"name": "翼", "xiang": "朱雀", "wuxing": "火", "animal": "蛇", "desc": "翼火蛇"},
+    {"name": "轸", "xiang": "朱雀", "wuxing": "水", "animal": "蚓", "desc": "轸水蚓"},
+]
+
+# 七曜对应五行（日月+五大行星）
+_QIYAO_MAP = {
+    "日": {"wuxing": "火", "desc": "太阳·火行"},
+    "月": {"wuxing": "水", "desc": "太阴·水行"},
+    "火": {"wuxing": "火", "desc": "荧惑·火行"},
+    "水": {"wuxing": "水", "desc": "辰星·水行"},
+    "木": {"wuxing": "木", "desc": "岁星·木行"},
+    "金": {"wuxing": "金", "desc": "太白·金行"},
+    "土": {"wuxing": "土", "desc": "镇星·土行"},
+}
+
+# 七曜星期映射（星期日=日，星期一=月，...）
+_WEEKDAY_QIYAO = {
+    6: "日",  # 周日→日
+    0: "月",  # 周一→月
+    1: "火",  # 周二→火（Mars→Tuesday）
+    2: "水",  # 周三→水（Mercury→Wednesday）
+    3: "木",  # 周四→木（Jupiter→Thursday）
+    4: "金",  # 周五→金（Venus→Friday）
+    5: "土",  # 周六→土（Saturn→Saturday）
+}
+
+
+def _get_zhixiu(solar_date):
+    """
+    计算当日值宿（二十八宿）
+    使用儒略日对28取模
+    基准：2000-01-07 = 角宿（JD=2451551, 2451551 mod 28 = 7）
+    """
+    # 简化儒略日计算
+    y = solar_date.year
+    m = solar_date.month
+    d = solar_date.day
+    if m <= 2:
+        y -= 1
+        m += 12
+    A = int(y / 100)
+    B = 2 - A + int(A / 4)
+    jd = int(365.25 * (y + 4716)) + int(30.6001 * (m + 1)) + d + B - 1524.5
+    idx = int(jd) % 28
+    return _28XIU_MAP[idx]
+
+
+def _get_qiyao(solar_date):
+    """
+    计算当日七曜（日月+五星）
+    星期映射：日(周日) 月(周一) 火(周二) 水(周三) 木(周四) 金(周五) 土(周六)
+    """
+    weekday = solar_date.weekday()  # 0=Mon, 6=Sun
+    yao_name = _WEEKDAY_QIYAO[weekday]
+    return _QIYAO_MAP[yao_name]
+
+
 # 地支→先天八卦方位映射
 _DIZHI_BAGUA_MAP = {
     "子": {"gua": "坎", "fangwei": "北方", "red_balls": [1, 11, 21], "blue_balls": [1]},
@@ -1939,6 +2030,24 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
         f"红球 {_fmt(day_zhi_bagua['red_balls'])} ｜蓝球 {_fmt(day_zhi_bagua['blue_balls'])}"
     )
 
+    # ===== v5.0 P16: 二十八宿+七曜（宇宙维度）=====
+    zhixiu = _get_zhixiu(solar_date)
+    qiyao = _get_qiyao(solar_date)
+    xiu_wuxing = zhixiu["wuxing"]
+    yao_wuxing = qiyao["wuxing"]
+    xiu_conflict = xiu_wuxing != day_wuxing
+    yao_conflict = yao_wuxing != day_wuxing
+    formatted_xingxiu = (
+        f"【二十八宿·七曜号码（娱乐）】\n"
+        f"值宿：{zhixiu['xiang']}{zhixiu['desc']}·{xiu_wuxing}行"
+        f"{' ⚠️与正五行冲突' if xiu_conflict else ''}\n"
+        f"  值宿红球 {_fmt(_WUXING_MAP[xiu_wuxing]['red_balls'])} ｜蓝球 {_fmt(_WUXING_MAP[xiu_wuxing]['blue_balls'])}\n"
+        f"七曜：{qiyao['desc']}·{yao_wuxing}行"
+        f"{' ⚠️与正五行冲突' if yao_conflict else ''}\n"
+        f"  七曜红球 {_fmt(_WUXING_MAP[yao_wuxing]['red_balls'])} ｜蓝球 {_fmt(_WUXING_MAP[yao_wuxing]['blue_balls'])}\n"
+        f"🌌三维天文坐标：月相{moon_phase} + 宿{zhixiu['name']}({xiu_wuxing}) + 曜{qiyao['desc'][:2]}({yao_wuxing})"
+    )
+
     # ===== v3.0 P1: 纳音五行号码 =====
     day_ganzhi = day_gan + day_zhi
     day_nayin = _NAYIN_MAP.get(day_ganzhi, "")
@@ -2024,6 +2133,18 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
     for n in day_zhi_bagua["red_balls"]:
         red_heat[n] = red_heat.get(n, 0) + 1
     for n in day_zhi_bagua["blue_balls"]:
+        blue_heat[n] = blue_heat.get(n, 0) + 1
+
+    # 维度7b：二十八宿值宿（权重×1，v5.0 P16宇宙维度）
+    for n in _WUXING_MAP[xiu_wuxing]["red_balls"]:
+        red_heat[n] = red_heat.get(n, 0) + 1
+    for n in _WUXING_MAP[xiu_wuxing]["blue_balls"]:
+        blue_heat[n] = blue_heat.get(n, 0) + 1
+
+    # 维度7c：七曜照宫（权重×1，v5.0 P16宇宙维度）
+    for n in _WUXING_MAP[yao_wuxing]["red_balls"]:
+        red_heat[n] = red_heat.get(n, 0) + 1
+    for n in _WUXING_MAP[yao_wuxing]["blue_balls"]:
         blue_heat[n] = blue_heat.get(n, 0) + 1
 
     # 维度8：时辰（可选，权重×1）
@@ -2151,8 +2272,8 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
     conflict_red_str = "、".join(f"{n:02d}" for n in conflict_red) if conflict_red else "无"
     conflict_blue_str = "、".join(f"{n:02d}" for n in conflict_blue) if conflict_blue else "无"
 
-    dimension_count = (9 if hour_zhi else 8) if (birthday and b_shengke) else (8 if hour_zhi else 7)
-    _dim_names = "旺行+生我行+日月+月相+六柱干支+纳音五行+飞星方位"
+    dimension_count = (11 if hour_zhi else 10) if (birthday and b_shengke) else (10 if hour_zhi else 9)
+    _dim_names = "旺行+生我行+日月+月相+六柱干支+纳音五行+飞星方位+🌌值宿+🌌七曜"
     if hour_zhi:
         _dim_names += "+时辰"
     if birthday and b_shengke:
@@ -2193,6 +2314,7 @@ async def ganzhi_by_date(date: str = "2026-05-22", mode: str = "day_gan", hour_z
         "formatted_summary": formatted_summary,
         "formatted_liuzhu": formatted_liuzhu,
         "formatted_feixing": formatted_feixing,
+        "formatted_xingxiu": formatted_xingxiu,
     }
 
     # 时辰号码（可选，拼入summary末尾）
@@ -3126,6 +3248,8 @@ async def _run_backtest(data, periods, mode, birthday=""):
         "纳音五行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "六柱干支": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "飞星方位": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
+        "🌌值宿": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
+        "🌌七曜": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "🎂出生旺行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "🎂出生生我行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
         "🎂出生克我行": {"red_hit": 0, "red_total": 0, "blue_hit": 0, "blue_total": 0, "red_pool": 0, "blue_pool": 0},
@@ -3254,6 +3378,20 @@ async def _run_backtest(data, periods, mode, birthday=""):
             _count_dim("飞星方位",
                         set(bagua["red_balls"]),
                         set(bagua["blue_balls"]))
+
+        # v5.0 P16: 二十八宿值宿回测
+        zhixiu = _get_zhixiu(solar_date)
+        xiu_wx = zhixiu["wuxing"]
+        _count_dim("🌌值宿",
+                    set(_WUXING_MAP[xiu_wx]["red_balls"]),
+                    set(_WUXING_MAP[xiu_wx]["blue_balls"]))
+
+        # v5.0 P16: 七曜回测
+        qiyao = _get_qiyao(solar_date)
+        yao_wx = qiyao["wuxing"]
+        _count_dim("🌌七曜",
+                    set(_WUXING_MAP[yao_wx]["red_balls"]),
+                    set(_WUXING_MAP[yao_wx]["blue_balls"]))
 
         # v3.5: 出生维度回测（birthday参数）
         if birthday:
@@ -3781,6 +3919,26 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
         for n in bagua["blue_balls"]:
             xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + _weights_blue["飞星"]
 
+    # ===== v5.0 P16: 二十八宿宇宙维度 =====
+    zhixiu = _get_zhixiu(solar_date)
+    qiyao = _get_qiyao(solar_date)
+    _XIU_WEIGHT = 1  # 二十八宿权重（初始1，待回测调整）
+    _YAO_WEIGHT = 1  # 七曜权重（初始1，待回测调整）
+
+    # 值宿→五行→号码映射
+    xiu_wuxing = zhixiu["wuxing"]
+    for n in _WUXING_MAP[xiu_wuxing]["red_balls"]:
+        xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + _XIU_WEIGHT
+    for n in _WUXING_MAP[xiu_wuxing]["blue_balls"]:
+        xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + _XIU_WEIGHT
+
+    # 七曜→五行→号码映射
+    yao_wuxing = qiyao["wuxing"]
+    for n in _WUXING_MAP[yao_wuxing]["red_balls"]:
+        xuanxue_red_score[n] = xuanxue_red_score.get(n, 0) + _YAO_WEIGHT
+    for n in _WUXING_MAP[yao_wuxing]["blue_balls"]:
+        xuanxue_blue_score[n] = xuanxue_blue_score.get(n, 0) + _YAO_WEIGHT
+
     # ===== v3.5 出生维度（可选，权重基于回测） =====
     b_day_gan_p = b_day_zhi_p = b_day_wuxing_p = b_shengke_p = None
     birth_weight_str = ""
@@ -4115,6 +4273,7 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
     if birth_weight_str:
         lines.append(f"🎂出生维度权重：{birth_weight_str}")
     lines.append(f"🔮贝叶斯融合：先验P(hi)·玄学Softmax(T={_PRIOR_TEMP}) + 似然P(d|hi)·统计Softmax(T={_LIKELIHOOD_TEMP}) → 后验P(hi|d)")
+    lines.append(f"🌌二十八宿：{zhixiu['xiang']}{zhixiu['desc']}·{zhixiu['wuxing']}行 | 七曜·{qiyao['desc']}·{qiyao['wuxing']}行")
 
     # v4.1 冷热周期摘要
     cold_to_warm = sorted([n for n in range(1,34) if hot_cold_red[n]["turn"] == "冷→温↑"])
