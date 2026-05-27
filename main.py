@@ -428,6 +428,203 @@ def get_trading_signal(data, symbol):
         "timestamp": datetime.now().isoformat()
     }
 
+
+def detect_trade_points(data, symbol):
+    """
+    精准买卖点检测（V5新增）
+
+    在 get_trading_signal 基础上，组合多个指标识别高胜率买卖时机。
+
+    买入点识别规则（需满足2个及以上条件才算 strong_buy）：
+    1. MACD 金叉（DIF上穿DEA）
+    2. RSI 从超卖区回升（前日<30，今日≥30）
+    3. KDJ 超卖金叉（J<0 且 K上穿D）
+    4. 放量上涨（量比>1.5 + 阳线）
+    5. 价格触及布林带下轨后反弹（今日收>开）
+    6. 均线多头排列 + 价格回踩MA20支撑
+
+    卖出点识别规则（需满足2个及以上条件才算 strong_sell）：
+    1. MACD 死叉（DIF下穿DEA）
+    2. RSI 从超买区回落（前日>70，今日≤70）
+    3. KDJ 超买卖叉（J>100 且 K下穿D）
+    4. 放量下跌（量比>1.5 + 阴线）
+    5. 价格触及布林带上轨后回落（今日收<开）
+    6. 均线空头排列 + 价格反弹至MA20阻力
+
+    返回：
+    - trade_point: strong_buy / buy / sell / strong_sell / hold
+    - buy_reasons: 买入理由列表
+    - sell_reasons: 卖出理由列表
+    - entry_price: 建议入场价（买入点）
+    - stop_loss: 建议止损价
+    - take_profit: 建议止盈价
+    - score: 综合评分 (-10 ~ +10)
+    """
+    current_price = data['Close'].iloc[-1]
+    prev_close = data['Close'].iloc[-2] if len(data) > 1 else current_price
+    is_green = current_price > data['Open'].iloc[-1] if len(data) > 1 else True
+
+    rsi, rsi_prev, rsi_delta = calculate_rsi(data)
+    macd_data = calculate_macd(data)
+    kdj_data = calculate_kdj(data)
+    boll = calculate_bollinger_bands(data)
+    vol_status, vol_ratio = calculate_volume_signal(data)
+
+    ma5 = data['Close'].rolling(window=5).mean().iloc[-1]
+    ma10 = data['Close'].rolling(window=10).mean().iloc[-1]
+    ma20 = data['Close'].rolling(window=20).mean().iloc[-1]
+    ma50 = data['Close'].rolling(window=50).mean().iloc[-1] if len(data) >= 50 else None
+
+    buy_reasons = []
+    sell_reasons = []
+    buy_count = 0
+    sell_count = 0
+
+    # ========== 买入点检测 ==========
+
+    # 1. MACD 金叉
+    if macd_data['golden_cross']:
+        buy_reasons.append(f"MACD金叉确认（DIF={round(macd_data['macd'],4)}，DEA={round(macd_data['signal'],4)}）")
+        buy_count += 1
+
+    # 2. RSI 从超卖区回升
+    if rsi_prev < 30 and rsi >= 30:
+        buy_reasons.append(f"RSI脱离超卖区（{round(rsi_prev,1)}→{round(rsi,1)}），反转信号")
+        buy_count += 1
+    elif rsi < 20:
+        buy_reasons.append(f"RSI极度超卖（{round(rsi,1)}），超跌反弹概率大")
+        buy_count += 1
+
+    # 3. KDJ 超卖金叉（J<0 区间 K上穿D）
+    k, d, j = kdj_data['k'], kdj_data['d'], kdj_data['j']
+    if len(data) >= 3:
+        # 计算前一日 KDJ
+        prev_rsv = (data['Close'].iloc[-3] - data['Low'].iloc[-12:-3].min()) / \
+                   (data['High'].iloc[-12:-3].max() - data['Low'].iloc[-12:-3].min()) * 100 \
+                   if len(data) >= 12 else 50
+        prev_k_val = (prev_rsv + 2 * k) / 3  # 近似
+        kdj_golden = (prev_k_val < d and k >= d)  # K 从下穿越 D
+    else:
+        kdj_golden = False
+
+    if j < 0 and kdj_golden:
+        buy_reasons.append(f"KDJ超卖区金叉（K={k}，D={d}，J={round(j,1)}）")
+        buy_count += 1
+    elif j < 0:
+        buy_reasons.append(f"KDJ的J值深度超卖（{round(j,1)}），反弹在即")
+        buy_count += 0.5
+
+    # 4. 放量上涨
+    if vol_status in ("high_volume", "above_avg") and is_green:
+        buy_reasons.append(f"放量上涨（量比{vol_ratio}倍），资金进场确认")
+        buy_count += 1
+
+    # 5. 触及布林带下轨后反弹
+    prev_low = data['Low'].iloc[-2] if len(data) > 1 else current_price
+    if prev_low <= boll['lower'] and is_green:
+        buy_reasons.append(f"触及布林带下轨（{round(boll['lower'],2)}）后反弹，支撑有效")
+        buy_count += 1
+    elif current_price <= boll['lower'] * 1.01 and is_green:
+        buy_reasons.append(f"接近布林带下轨后反弹，支撑区企稳")
+        buy_count += 0.5
+
+    # 6. 均线多头 + 回踩MA20
+    ma_bullish = current_price > ma5 and ma5 > ma10 and ma10 > ma20
+    if ma_bullish and prev_close <= ma20 and current_price > ma20:
+        buy_reasons.append(f"多头趋势回踩MA20（{round(ma20,2)}）支撑后企稳")
+        buy_count += 1
+
+    # ========== 卖出点检测 ==========
+
+    # 1. MACD 死叉
+    if macd_data['death_cross']:
+        sell_reasons.append(f"MACD死叉确认（DIF={round(macd_data['macd'],4)}，DEA={round(macd_data['signal'],4)}）")
+        sell_count += 1
+
+    # 2. RSI 从超买区回落
+    if rsi_prev > 70 and rsi <= 70:
+        sell_reasons.append(f"RSI脱离超买区（{round(rsi_prev,1)}→{round(rsi,1)}），见顶信号")
+        sell_count += 1
+    elif rsi > 85:
+        sell_reasons.append(f"RSI极度超买（{round(rsi,1)}），随时可能回调")
+        sell_count += 1
+
+    # 3. KDJ 超买卖叉（J>100 区间 K下穿D）
+    if j > 100 and not kdj_golden and k < d:
+        sell_reasons.append(f"KDJ超买区死叉（K={k}，D={d}，J={round(j,1)}）")
+        sell_count += 1
+    elif j > 100:
+        sell_reasons.append(f"KDJ的J值深度超买（{round(j,1)}），短期风险极大")
+        sell_count += 0.5
+
+    # 4. 放量下跌
+    if vol_status in ("high_volume", "above_avg") and not is_green:
+        sell_reasons.append(f"放量下跌（量比{vol_ratio}倍），资金出逃确认")
+        sell_count += 1
+
+    # 5. 触及布林带上轨后回落
+    prev_high = data['High'].iloc[-2] if len(data) > 1 else current_price
+    if prev_high >= boll['upper'] and not is_green:
+        sell_reasons.append(f"触及布林带上轨（{round(boll['upper'],2)}）后回落，压力有效")
+        sell_count += 1
+    elif current_price >= boll['upper'] * 0.99 and not is_green:
+        sell_reasons.append(f"接近布林带上轨后回落，压力区受阻")
+        sell_count += 0.5
+
+    # 6. 均线空头 + 反弹至MA20
+    ma_bearish = current_price < ma5 and ma5 < ma10 and ma10 < ma20
+    if ma_bearish and prev_close >= ma20 and current_price < ma20:
+        sell_reasons.append(f"空头趋势反弹至MA20（{round(ma20,2)}）后继续下跌")
+        sell_count += 1
+
+    # ========== 综合判断 ==========
+
+    # 评分：买入+卖出互相抵消
+    score = round((buy_count - sell_count) * 2, 1)
+
+    if buy_count >= 2 and sell_count == 0:
+        trade_point = "strong_buy"
+    elif buy_count >= 1.5 and buy_count > sell_count:
+        trade_point = "buy"
+    elif sell_count >= 2 and buy_count == 0:
+        trade_point = "strong_sell"
+    elif sell_count >= 1.5 and sell_count > buy_count:
+        trade_point = "sell"
+    else:
+        trade_point = "hold"
+
+    # 建议价格（基于近期高低点）
+    recent_low = data['Low'].tail(20).min()
+    recent_high = data['High'].tail(20).max()
+    atr = (data['High'].tail(14).max() - data['Low'].tail(14).min()) / 14  # 简化ATR
+
+    if trade_point in ("strong_buy", "buy"):
+        entry_price = round(current_price * 0.995, 2)   # 稍低于当前价
+        stop_loss = round(recent_low * 0.98, 2)          # 近期低点下方2%
+        take_profit = round(current_price + atr * 3, 2)  # 3倍ATR
+    elif trade_point in ("strong_sell", "sell"):
+        entry_price = 0  # 卖出不需要入场价
+        stop_loss = 0
+        take_profit = round(recent_low * 1.02, 2)       # 回落到近期低点附近
+    else:
+        # hold/观望：无明确入场点，止损止盈仅作为参考区间
+        entry_price = 0
+        stop_loss = round(recent_low * 0.97, 2)
+        take_profit = round(recent_high * 1.03, 2)
+
+    return {
+        "trade_point": trade_point,
+        "buy_reasons": buy_reasons,
+        "sell_reasons": sell_reasons,
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "entry_price": entry_price,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "score": score,
+    }
+
+
 @app.get("/")
 def read_root():
     """API健康检查"""
