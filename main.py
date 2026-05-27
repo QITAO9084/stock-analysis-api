@@ -1888,9 +1888,9 @@ def build_formatted_report(
         lines.append(f"⚠️ ADX={adx}<25，趋势不明确，处于震荡市。以上评分仅供参考，不建议基于技术信号操作。")
     # 买卖点（V5.19.4: 按信号类型区分显示逻辑）
     if trade_point.lower() in ("hold",):
-        # 观望：只显示支撑/压力参考，不显示虚假的止损止盈
-        support_ref = f"{currency_symbol}{stop_loss:.2f}" if stop_loss and stop_loss != 0 else "—"
-        resist_ref = f"{currency_symbol}{take_profit:.2f}" if take_profit and take_profit != 0 else "—"
+        # 观望：显示真正的技术支撑/压力位（V5.19.5: 修复用错字段的bug）
+        support_ref = f"{currency_symbol}{support_level:.2f}" if support_level and support_level > 0 else "—"
+        resist_ref = f"{currency_symbol}{resistance_level:.2f}" if resistance_level and resistance_level > 0 else "—"
         lines.append(f"🎯 买卖点：暂无明确入场信号（支撑 {support_ref} / 压力 {resist_ref}）")
     elif trade_point.lower() in ("strong_buy", "buy"):
         entry_str = f"{currency_symbol}{entry_price:.2f}"
@@ -2484,8 +2484,8 @@ def build_tradepoint_report(
     # 价格建议（V5.19.4: 按信号类型区分显示）
     lines.append("💰 价格建议")
     if trade_point.lower() in ("hold",):
-        support_ref = f"{currency_symbol}{stop_loss:.2f}" if stop_loss and stop_loss != 0 else "—"
-        resist_ref = f"{currency_symbol}{take_profit:.2f}" if take_profit and take_profit != 0 else "—"
+        support_ref = f"{currency_symbol}{support_level:.2f}" if support_level and support_level > 0 else "—"
+        resist_ref = f"{currency_symbol}{resistance_level:.2f}" if resistance_level and resistance_level > 0 else "—"
         lines.append(f"  暂无明确入场信号（支撑 {support_ref} / 压力 {resist_ref}）")
     elif trade_point.lower() in ("strong_buy", "buy"):
         entry_str = f"{currency_symbol}{entry_price:.2f}"
