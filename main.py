@@ -12,8 +12,8 @@ import threading
 
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.2.0"
+    description="股票/加密货币分析API - V5.19.3（买卖点检测/缓存重试限速/优雅降级）",
+    version="5.19.3"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -38,6 +38,40 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ===== 优雅降级：500/异常 → 200 + signal:error =====
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(HTTPException)
+async def graceful_http_error_handler(request: Request, exc: HTTPException):
+    """HTTPException(404/500) → 200 响应，Coze Agent 不报工具调用失败"""
+    if exc.status_code >= 500:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "error",
+                "signal": "error",
+                "message": f"抱歉，服务暂时不可用（{str(exc.detail)}）。请稍后重试。",
+                "formatted_report": f"⚠️ 服务暂时不可用\n\n{str(exc.detail)}\n\n请稍后重试。"
+            }
+        )
+    # 400 参数错误保持原样
+    raise exc
+
+
+@app.exception_handler(Exception)
+async def graceful_unhandled_error_handler(request: Request, exc: Exception):
+    """未捕获异常也走优雅降级"""
+    msg = str(exc)
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "error",
+            "signal": "error",
+            "message": f"抱歉，服务暂时不可用（{msg}）。请稍后重试。",
+            "formatted_report": f"⚠️ 服务暂时不可用\n\n{msg}\n\n请稍后重试。"
+        }
+    )
 
 # ===== yfinance 缓存 + 重试 + 限速机制 =====
 _yf_cache = {}       # {key: {"data": DataFrame, "info": dict, "ts": float}}
