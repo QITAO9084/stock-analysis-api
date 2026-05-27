@@ -1886,21 +1886,31 @@ def build_formatted_report(
     lines.append(f"📌 综合信号：{signal_cn} {stars}（{conf_cn}）")
     if adx_filtered:
         lines.append(f"⚠️ ADX={adx}<25，趋势不明确，处于震荡市。以上评分仅供参考，不建议基于技术信号操作。")
-    # 买卖点
-    entry_str = f"{currency_symbol}{entry_price:.2f}" if entry_price and entry_price != 0 else "—"
-    stop_str = f"{currency_symbol}{stop_loss:.2f}" if stop_loss and stop_loss != 0 else "—"
-    take_str = f"{currency_symbol}{take_profit:.2f}" if take_profit and take_profit != 0 else "—"
-    lines.append(f"🎯 买卖点：入场 {entry_str} / 止损 {stop_str} / 止盈 {take_str}")
-    # V5.17.9: ADX<25 震荡市买卖点仅供参考
-    if adx_filtered:
-        lines.append(f"⚠️ ADX={adx}<25 趋势不明，以上价位仅供参考，不建议作为实际操作依据")
-    # V5.16: 风险收益比
-    if entry_price and stop_loss and take_profit and entry_price != 0 and stop_loss != 0:
-        risk = abs(entry_price - stop_loss)
-        reward = abs(take_profit - entry_price)
-        if risk > 0:
-            rr = round(reward / risk, 1)
-            lines.append(f"📐 风险收益比：R:R = 1:{rr}（每承担{currency_symbol}1风险，预期收益{currency_symbol}{rr}）")
+    # 买卖点（V5.19.4: 按信号类型区分显示逻辑）
+    if trade_point.lower() in ("hold",):
+        # 观望：只显示支撑/压力参考，不显示虚假的止损止盈
+        support_ref = f"{currency_symbol}{stop_loss:.2f}" if stop_loss and stop_loss != 0 else "—"
+        resist_ref = f"{currency_symbol}{take_profit:.2f}" if take_profit and take_profit != 0 else "—"
+        lines.append(f"🎯 买卖点：暂无明确入场信号（支撑 {support_ref} / 压力 {resist_ref}）")
+    elif trade_point.lower() in ("strong_buy", "buy"):
+        entry_str = f"{currency_symbol}{entry_price:.2f}"
+        stop_str = f"{currency_symbol}{stop_loss:.2f}"
+        take_str = f"{currency_symbol}{take_profit:.2f}"
+        lines.append(f"🎯 买卖点：入场 {entry_str} / 止损 {stop_str} / 止盈 {take_str}")
+        # V5.17.9: ADX<25 震荡市买卖点仅供参考
+        if adx_filtered:
+            lines.append(f"⚠️ ADX={adx}<25 趋势不明，以上价位仅供参考，不建议作为实际操作依据")
+        # V5.16: 风险收益比（仅买入信号有意义）
+        if stop_loss != 0:
+            risk = abs(entry_price - stop_loss)
+            reward = abs(take_profit - entry_price)
+            if risk > 0:
+                rr = round(reward / risk, 1)
+                lines.append(f"📐 风险收益比：R:R = 1:{rr}（每承担{currency_symbol}1风险，预期收益{currency_symbol}{rr}）")
+    else:
+        # sell/strong_sell
+        take_str = f"{currency_symbol}{take_profit:.2f}" if take_profit and take_profit != 0 else "—"
+        lines.append(f"🎯 买卖点：建议离场（目标 {take_str}）")
     lines.append("=" * 40)
     # RSI背离警告（P0）
     if rsi_div_type and rsi_div_type != "none":
@@ -2471,14 +2481,22 @@ def build_tradepoint_report(
         lines.append("  暂无明确的卖出信号")
     lines.append("")
 
-    # 价格建议
+    # 价格建议（V5.19.4: 按信号类型区分显示）
     lines.append("💰 价格建议")
-    entry_str = f"{currency_symbol}{entry_price:.2f}" if entry_price and entry_price != 0 else "—"
-    stop_str = f"{currency_symbol}{stop_loss:.2f}" if stop_loss and stop_loss != 0 else "—"
-    take_str = f"{currency_symbol}{take_profit:.2f}" if take_profit and take_profit != 0 else "—"
-    lines.append(f"  入场价：{entry_str}")
-    lines.append(f"  止损价：{stop_str}")
-    lines.append(f"  止盈价：{take_str}")
+    if trade_point.lower() in ("hold",):
+        support_ref = f"{currency_symbol}{stop_loss:.2f}" if stop_loss and stop_loss != 0 else "—"
+        resist_ref = f"{currency_symbol}{take_profit:.2f}" if take_profit and take_profit != 0 else "—"
+        lines.append(f"  暂无明确入场信号（支撑 {support_ref} / 压力 {resist_ref}）")
+    elif trade_point.lower() in ("strong_buy", "buy"):
+        entry_str = f"{currency_symbol}{entry_price:.2f}"
+        stop_str = f"{currency_symbol}{stop_loss:.2f}"
+        take_str = f"{currency_symbol}{take_profit:.2f}"
+        lines.append(f"  入场价：{entry_str}")
+        lines.append(f"  止损价：{stop_str}")
+        lines.append(f"  止盈价：{take_str}")
+    else:
+        take_str = f"{currency_symbol}{take_profit:.2f}" if take_profit and take_profit != 0 else "—"
+        lines.append(f"  建议离场（目标 {take_str}）")
     lines.append("")
 
     # 核心指标
