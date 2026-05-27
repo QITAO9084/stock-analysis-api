@@ -609,11 +609,11 @@ def get_trading_signal(data, symbol):
         "volume_ratio": vol_ratio,
         "support_level": round(support_level, 2),
         "resistance_level": round(resistance_level, 2),
+        # V5.19.6: trend_direction始终用+DI/-DI判定，不再受buy_score/sell_score干扰
+        # ADX衡量趋势强度，+DI/-DI衡量趋势方向，两者独立
         "trend_direction": (
             "bullish" if adx_data["plus_di"] > adx_data["minus_di"] else
             ("bearish" if adx_data["minus_di"] > adx_data["plus_di"] else "neutral")
-        ) if adx_data.get("adx", 0) < 25 else (
-            "bullish" if (buy_score > sell_score) else ("bearish" if (sell_score > buy_score) else "neutral")
         ),
         "timestamp": datetime.now().isoformat()
     }
@@ -2186,6 +2186,9 @@ def build_formatted_report(
             lines.append(f"💡 ADX={adx}<25 震荡市：顶部综合信号已过滤为'震荡观望'，底部'{score_signal}'为14维加权评分（趋势力权重高），ADX<25时仅供参考。短期建议观望，关注ADX回升后底部方向信号。")
     elif _diverge:
         lines.append(f"💡 顶部信号'{signal_cn}'由事件驱动型买卖点检测（RSI极端值/MFI超买/量价背离等），底部'{score_signal}'由14维加权评分（ADX/MACD/MA等趋势力权重更高），两者侧重点不同。建议结合多周期一致性综合判断。")
+    elif not _top_direction and _bottom_direction:
+        # V5.19.6: 顶部信号为观望/中性，但14维评分有明确方向倾向 → 以14维评分为主
+        lines.append(f"💡 顶部综合信号为'{signal_cn}'（无明确方向），但14维加权评分显示'{score_signal}'（覆盖ADX/MACD/KDJ/RSI/MFI/OBV/VWAP等14个维度），方向更明确。建议以14维评分为主要参考。")
     lines.append("=" * 40)
     lines.append("")
     lines.append("关键信号触发原因")
