@@ -824,6 +824,12 @@ def read_root():
         "version": "1.0.0"
     }
 
+
+@app.get("/healthz")
+def healthz():
+    """Render health check endpoint"""
+    return {"status": "healthy"}
+
 @app.get("/stock/info")
 def get_stock_info(symbol: str = "AAPL", market: str = "us"):
     """
