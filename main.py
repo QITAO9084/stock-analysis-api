@@ -8,6 +8,11 @@ from datetime import datetime, timedelta
 from typing import Optional
 import time
 import json
+import sys
+import os as _os
+
+# V5.19.6: 启动诊断日志
+print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
 app = FastAPI(
@@ -436,6 +441,11 @@ def read_root():
         "message": "Stock Analysis API is running",
         "version": "1.0.0"
     }
+
+@app.get("/health")
+def health_check():
+    """Railway 健康检查端点"""
+    return {"status": "healthy"}
 
 @app.get("/stock/info")
 def get_stock_info(symbol: str = "AAPL", market: str = "us"):
@@ -4321,4 +4331,6 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(_os.environ.get("PORT", "8000"))
+    print(f"===== STARTUP: Using PORT={port}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
+    uvicorn.run(app, host="0.0.0.0", port=port)
