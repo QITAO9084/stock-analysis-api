@@ -1,19 +1,33 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-import yfinance as yf
-import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 from typing import Optional
 import time
 import json
 import threading
 
+# ===== 懒加载代理：避免 Railway 启动时导入重模块超时 =====
+class _LazyModule:
+    """延迟加载模块代理 —— 首次访问属性时才执行真实 import"""
+    def __init__(self, name):
+        self._name = name
+        self._mod = None
+    def _load(self):
+        if self._mod is None:
+            self._mod = __import__(self._name, fromlist=[''])
+        return self._mod
+    def __getattr__(self, attr):
+        return getattr(self._load(), attr)
+
+# 用代理替换顶层导入，现有代码中的 yf.Ticker / pd.isna 等无需改动
+yf = _LazyModule('yfinance')
+pd = _LazyModule('pandas')
+
 app = FastAPI(
     title="Stock Analysis API",
-    description="股票/加密货币分析API - V5.19.3（买卖点检测/缓存重试限速/优雅降级）",
-    version="5.19.3"
+    description="股票/加密货币分析API - V5.20.13（懒加载/Railway部署修复/健康检查）",
+    version="5.20.13"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -72,6 +86,14 @@ async def graceful_unhandled_error_handler(request: Request, exc: Exception):
             "formatted_report": f"⚠️ 服务暂时不可用\n\n{msg}\n\n请稍后重试。"
         }
     )
+
+# ===== 健康检查：Railway 部署必备 =====
+@app.get("/health", tags=["健康检查"])
+async def health_check():
+    """
+    Railway 健康检查端点 —— 必须秒级响应，不触发任何重模块导入
+    """
+    return {"status": "ok", "version": "5.20.13"}
 
 # ===== yfinance 缓存 + 重试 + 限速机制 =====
 _yf_cache = {}       # {key: {"data": DataFrame, "info": dict, "ts": float}}
