@@ -792,6 +792,18 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             "entry_price": trade_points["entry_price"],
             "stop_loss": trade_points["stop_loss"],
             "take_profit": trade_points["take_profit"],
+            # V5.21 三套交易方案
+            "entry_a": trade_points["entry_a"],
+            "stop_loss_a": trade_points["stop_loss_a"],
+            "take_profit_a": trade_points["take_profit_a"],
+            "entry_b": trade_points["entry_b"],
+            "stop_loss_b": trade_points["stop_loss_b"],
+            "take_profit_b": trade_points["take_profit_b"],
+            "entry_c1": trade_points["entry_c1"],
+            "entry_c2": trade_points["entry_c2"],
+            "stop_loss_c": trade_points["stop_loss_c"],
+            "take_profit_c1": trade_points["take_profit_c1"],
+            "take_profit_c2": trade_points["take_profit_c2"],
             # 技术指标（全部扁平化）
             "rsi": round(indicators["rsi"], 2),
             "rsi_prev": round(indicators["rsi_prev"], 2),
