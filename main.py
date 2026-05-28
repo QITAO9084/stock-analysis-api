@@ -11,7 +11,7 @@ import json
 import sys
 import os as _os
 
-# V5.20.24: ADX过滤+MACD柱限权+信号方向覆盖（V5.20.x修复重新应用）
+# V5.20.25: HOLD→NEUTRAL标准化 + 测试矩阵扩展（V5.20.x修复重新应用）
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
@@ -753,7 +753,11 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             final_trade_point = "hold"
             final_trade_point_cn = f"ADX震荡过滤-观望（ADX={adx_val}）"
         else:
-            # ADX≥25 强趋势：防止 event-driven 评分为 hold 但加权方向明确
+            # ADX≥25 强趋势
+            # 1. HOLD → NEUTRAL 标准化（get_trading_signal 可能返回 "HOLD"）
+            if final_signal == "HOLD":
+                final_signal = "NEUTRAL"
+            # 2. 防止 event-driven 评分为 hold 但加权方向明确
             if trade_points["trade_point"] == "hold":
                 orig_signal = signal_data["signal"]
                 if orig_signal == "BUY":
