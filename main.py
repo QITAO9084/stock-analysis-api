@@ -11,7 +11,7 @@ import json
 import sys
 import os as _os
 
-# V5.19.6: 启动诊断日志
+# V5.20.24: ADX过滤+MACD柱限权+信号方向覆盖（V5.20.x修复重新应用）
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
@@ -230,6 +230,48 @@ def calculate_volume_signal(data):
     else:
         return "normal", round(ratio, 2)
 
+# V5.20.20: ADX 趋势强度计算
+def calculate_adx(data, period=14):
+    """计算 ADX 趋势强度指标（Wilder's DMI）"""
+    if len(data) < period * 2:
+        return {"adx": 0, "plus_di": 0, "minus_di": 0, "trend": "ranging"}
+
+    high = data['High']
+    low = data['Low']
+    close = data['Close']
+
+    # True Range
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.ewm(span=period, adjust=False).mean()
+
+    # +DM and -DM
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = ((up_move > down_move) & (up_move > 0)) * up_move
+    minus_dm = ((down_move > up_move) & (down_move > 0)) * down_move
+
+    plus_di = 100 * (plus_dm.ewm(span=period, adjust=False).mean() / atr)
+    minus_di = 100 * (minus_dm.ewm(span=period, adjust=False).mean() / atr)
+
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    adx = dx.ewm(span=period, adjust=False).mean()
+
+    adx_val = round(float(adx.iloc[-1]), 2)
+    plus_val = round(float(plus_di.iloc[-1]), 2)
+    minus_val = round(float(minus_di.iloc[-1]), 2)
+
+    if adx_val > 25:
+        trend = "strong_bull" if plus_val > minus_val else "strong_bear"
+    elif adx_val > 20:
+        trend = "weak_bull" if plus_val > minus_val else "weak_bear"
+    else:
+        trend = "ranging"
+
+    return {"adx": adx_val, "plus_di": plus_val, "minus_di": minus_val, "trend": trend}
+
 def get_trading_signal(data, symbol):
     """
     生成交易信号（V2增强版）
@@ -279,29 +321,41 @@ def get_trading_signal(data, symbol):
         buy_signals.append(f"RSI从超卖区回升（{round(rsi_prev,1)}→{round(rsi,1)}），反弹信号")
         buy_score += 3
 
-    # 2. MACD评分（含交叉检测）
+    # 2. MACD评分（含交叉检测 + V5.20.20 柱强度限权）
+    # 柱强度：MACD柱占价格百分比，避免 0.16% 柱高给满分
+    _macd_hist_pct = abs(macd_data['histogram']) / current_price * 100 if current_price > 0 else 0
+    if _macd_hist_pct >= 0.3:
+        _hist_strength = "full"   # ≥0.3% → 满分
+    elif _macd_hist_pct >= 0.1:
+        _hist_strength = "medium"  # 0.1-0.3% → 中档
+    else:
+        _hist_strength = "min"    # <0.1% → 最低分
+
     if macd_data['golden_cross']:
         buy_signals.append("MACD今日金叉，强烈买入信号")
-        buy_score += 3
+        buy_score += 3  # 金叉事件不降权
     elif macd_data['macd'] > macd_data['signal'] and macd_data['histogram'] > 0:
-        buy_signals.append("MACD多头运行，趋势偏多")
-        buy_score += 2
+        _pts = 2 if _hist_strength == "full" else (1 if _hist_strength == "medium" else 0.5)
+        buy_signals.append(f"MACD多头运行（柱强{_macd_hist_pct:.2f}%），趋势偏多")
+        buy_score += _pts
 
     if macd_data['death_cross']:
         sell_signals.append("MACD今日死叉，强烈卖出信号")
-        sell_score += 3
+        sell_score += 3  # 死叉事件不降权
     elif macd_data['macd'] < macd_data['signal'] and macd_data['histogram'] < 0:
-        sell_signals.append("MACD空头运行，趋势偏空")
-        sell_score += 2
+        _pts = 2 if _hist_strength == "full" else (1 if _hist_strength == "medium" else 0.5)
+        sell_signals.append(f"MACD空头运行（柱强{_macd_hist_pct:.2f}%），趋势偏空")
+        sell_score += _pts
 
     # MACD柱状图趋势：柱子缩小 = 动能衰减
     if macd_data['histogram_trend'] == "shrinking" and abs(macd_data['histogram']) > 0.5:
+        _pts = 1 if _hist_strength == "full" else (0.5 if _hist_strength == "medium" else 0)
         if macd_data['histogram'] > 0:
-            sell_signals.append("MACD多头柱缩小，上涨动能衰减")
-            sell_score += 1
+            sell_signals.append(f"MACD多头柱缩小（柱强{_macd_hist_pct:.2f}%），上涨动能衰减")
+            sell_score += _pts
         else:
-            buy_signals.append("MACD空头柱缩小，下跌动能衰减")
-            buy_score += 1
+            buy_signals.append(f"MACD空头柱缩小（柱强{_macd_hist_pct:.2f}%），下跌动能衰减")
+            buy_score += _pts
 
     # 3. KDJ评分（新增！）
     k, d, j = kdj_data['k'], kdj_data['d'], kdj_data['j']
@@ -681,6 +735,34 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
         buy_reasons_text = "；".join(trade_points["buy_reasons"]) if trade_points["buy_reasons"] else ""
         sell_reasons_text = "；".join(trade_points["sell_reasons"]) if trade_points["sell_reasons"] else ""
 
+        # V5.20.24: ADX 过滤 + 信号方向覆盖
+        adx_data = calculate_adx(data)
+        adx_val = adx_data["adx"]
+        adx_trend = adx_data["trend"]
+
+        # 最终信号（默认用原始值，ADX会覆盖）
+        final_signal = signal_data["signal"]
+        final_confidence = signal_data["confidence"]
+        final_trade_point = trade_points["trade_point"]
+        final_trade_point_cn = trade_point_cn.get(trade_points["trade_point"], "观望")
+
+        if adx_val < 25:
+            # 震荡市：强制中性，禁止买卖信号泄露
+            final_signal = "NEUTRAL"
+            final_confidence = "LOW"
+            final_trade_point = "hold"
+            final_trade_point_cn = f"ADX震荡过滤-观望（ADX={adx_val}）"
+        else:
+            # ADX≥25 强趋势：防止 event-driven 评分为 hold 但加权方向明确
+            if trade_points["trade_point"] == "hold":
+                orig_signal = signal_data["signal"]
+                if orig_signal == "BUY":
+                    final_trade_point = "buy"
+                    final_trade_point_cn = f"建议买入（ADX={adx_val}，{adx_trend}）"
+                elif orig_signal == "SELL":
+                    final_trade_point = "sell"
+                    final_trade_point_cn = f"建议卖出（ADX={adx_val}，{adx_trend}）"
+
         return {
             # 基础信息
             "symbol": str(symbol),
@@ -690,14 +772,17 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             "currency": str(info.get("currency", "USD")),
             "market": str(market),
             "analysis_time": datetime.now().isoformat(),
-            # 买卖信号
-            "signal": str(signal_data["signal"]),
-            "confidence": str(signal_data["confidence"]),
+            # 买卖信号（V5.20.24: 使用 ADX 过滤后的 final_* 值）
+            "signal": str(final_signal),
+            "confidence": str(final_confidence),
             "key_signals_text": signals_text,
-            # 买卖点（V5新增）
-            "trade_point": str(trade_points["trade_point"]),
-            "trade_point_cn": trade_point_cn.get(trade_points["trade_point"], "观望"),
+            # 买卖点（V5.20.24: 使用 ADX 过滤后的值）
+            "trade_point": str(final_trade_point),
+            "trade_point_cn": final_trade_point_cn,
             "trade_score": trade_points["score"],
+            # ADX 过滤（V5.20.24 新增）
+            "adx": adx_val,
+            "adx_trend": adx_trend,
             "buy_reasons_text": buy_reasons_text,
             "sell_reasons_text": sell_reasons_text,
             "entry_price": trade_points["entry_price"],
