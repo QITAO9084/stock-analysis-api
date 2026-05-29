@@ -1403,68 +1403,6 @@ def detect_trade_points(data, symbol):
         take_profit_c1 = round(recent_high * 1.03, 2)
         take_profit_c2 = round(recent_high * 1.07, 2)
 
-    # ========= 三套交易方案（V5.21 新增）==========
-    # 基于当前价、近期高低点、均线计算三套方案的止损/止盈
-    ma20 = data['Close'].rolling(window=20).mean().iloc[-1] if len(data) >= 20 else current_price
-    ma50 = data['Close'].rolling(window=50).mean().iloc[-1] if len(data) >= 50 else current_price
-    all_time_high = data['High'].max() if len(data) > 0 else current_price
-    atr_val = atr  # 复用上方已计算的标准 ATR（True Range + EMA）
-
-    # 方案A：收紧止损（激进，风险回报比 1:2.6）
-    if trade_point in ("strong_buy", "buy"):
-        stop_loss_a = round(ma20 * 0.99, 2)          # MA20下方1%
-        # 兜底：MA20偏离当前价超过ATR×3时，用ATR×2止损（防盈亏比倒挂）
-        if current_price - stop_loss_a > atr_val * 3:
-            stop_loss_a = round(current_price - atr_val * 2, 2)
-        take_profit_a = round(current_price + atr_val * 3, 2)  # 3倍ATR
-        entry_a = round(current_price * 0.995, 2)
-    elif trade_point in ("strong_sell", "sell"):
-        stop_loss_a = 0
-        take_profit_a = round(ma20 * 1.01, 2)
-        entry_a = 0
-    else:
-        stop_loss_a = round(ma20 * 0.99, 2)
-        take_profit_a = round(current_price + atr_val * 2, 2)
-        entry_a = 0
-
-    # 方案B：上调止盈（保守，用远期强阻力 + ATR兜底）
-    if trade_point in ("strong_buy", "buy"):
-        stop_loss_b = round(current_price - atr_val * 3, 2)  # ATR止损（宽于方案A）
-        # 兜底：ATR止损偏离超过ATR×4时限制
-        if current_price - stop_loss_b > atr_val * 4:
-            stop_loss_b = round(current_price - atr_val * 2.5, 2)
-        # 止盈：优先阻力位，兜底ATR×4（防all_time_high太近导致盈亏比倒挂）
-        take_profit_b = round(max(resistance_level, current_price + atr_val * 4), 2)
-        entry_b = round(current_price * 0.995, 2)
-    elif trade_point in ("strong_sell", "sell"):
-        stop_loss_b = 0
-        take_profit_b = round(recent_low * 1.02, 2)
-        entry_b = 0
-    else:
-        stop_loss_b = round(current_price - atr_val * 2, 2)
-        take_profit_b = round(current_price + atr_val * 3, 2)
-        entry_b = 0
-
-    # 方案C：分层仓位（动态止损）
-    if trade_point in ("strong_buy", "buy"):
-        entry_c1 = round(current_price * 0.995, 2)   # 首批
-        entry_c2 = round(current_price * 1.02, 2)    # 突破后追加
-        stop_loss_c = round(current_price * 0.95, 2)   # 初始止损5%
-        take_profit_c1 = round(current_price + atr_val * 2, 2)  # 第一批止盈
-        take_profit_c2 = round(current_price + atr_val * 4, 2)  # 第二批止盈
-    elif trade_point in ("strong_sell", "sell"):
-        entry_c1 = 0
-        entry_c2 = 0
-        stop_loss_c = 0
-        take_profit_c1 = round(current_price - atr_val * 2, 2)
-        take_profit_c2 = round(current_price - atr_val * 4, 2)
-    else:
-        entry_c1 = 0
-        entry_c2 = 0
-        stop_loss_c = round(current_price * 0.95, 2)
-        take_profit_c1 = round(current_price + atr_val * 1.5, 2)
-        take_profit_c2 = round(current_price + atr_val * 3, 2)
-
     return {
         "trade_point": trade_point,
         "buy_reasons": buy_reasons,
