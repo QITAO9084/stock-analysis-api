@@ -783,7 +783,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             # 买卖点（V5.20.24: 使用 ADX 过滤后的值）
             "trade_point": str(final_trade_point),
             "trade_point_cn": final_trade_point_cn,
-            "trade_score": trade_points["score"],
+            "trade_score": round((trade_points["score"] + 10) * 5),  # 映射 -10~+10 → 0~100
             # ADX 过滤（V5.20.24 新增）
             "adx": adx_val,
             "adx_trend": adx_trend,
