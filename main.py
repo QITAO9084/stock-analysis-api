@@ -1383,18 +1383,22 @@ def detect_trade_points(data, symbol):
         take_profit_a = round(current_price + atr_val * 2, 2)
         entry_a = 0
 
-    # 方案B：上调止盈（保守，用远期强阻力）
+    # 方案B：上调止盈（保守，用远期强阻力 + ATR兜底）
     if trade_point in ("strong_buy", "buy"):
-        stop_loss_b = round(recent_low * 0.98, 2)      # 近期低点下方2%（宽止损）
-        take_profit_b = round(all_time_high * 0.98, 2)  # 前高下方2%
+        stop_loss_b = round(current_price - atr_val * 3, 2)  # ATR止损（宽于方案A）
+        # 兜底：ATR止损偏离超过ATR×4时限制
+        if current_price - stop_loss_b > atr_val * 4:
+            stop_loss_b = round(current_price - atr_val * 2.5, 2)
+        # 止盈：优先阻力位，兜底ATR×4（防all_time_high太近导致盈亏比倒挂）
+        take_profit_b = round(max(resistance_level, current_price + atr_val * 4), 2)
         entry_b = round(current_price * 0.995, 2)
     elif trade_point in ("strong_sell", "sell"):
         stop_loss_b = 0
         take_profit_b = round(recent_low * 1.02, 2)
         entry_b = 0
     else:
-        stop_loss_b = round(recent_low * 0.97, 2)
-        take_profit_b = round(all_time_high * 0.98, 2)
+        stop_loss_b = round(current_price - atr_val * 2, 2)
+        take_profit_b = round(current_price + atr_val * 3, 2)
         entry_b = 0
 
     # 方案C：分层仓位（动态止损）
