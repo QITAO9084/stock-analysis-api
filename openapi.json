@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.25.1（修复 get_market_trend 异常时缺少 grade 字段导致 KeyError）",
-    "version": "5.25.1"
+    "description": "股票/加密货币分析API - V5.25.2（恢复被误删的 build_formatted_report 函数，含大盘因子+仓位引擎）",
+    "version": "5.25.2"
   },
   "servers": [
     {
