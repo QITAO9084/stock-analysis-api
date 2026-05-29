@@ -18,7 +18,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.24.0"
+    version="5.24.1"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -837,6 +837,28 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             # K线（文本格式）
             "kline_text": "\n".join(kline_text_lines),
         }
+        # V5.24.1: ADX方向覆盖时修正三套方案值
+        # 当 detect_trade_points 内部判定为 hold，但 ADX≥25 时显示覆盖为 buy/sell
+        # 此时三套方案的止损/止盈方向需要同步修正
+        if final_trade_point != trade_points["trade_point"]:
+            sp = signal_data["support_level"]
+            rs = signal_data["resistance_level"]
+            if final_trade_point in ("buy", "strong_buy"):
+                result["stop_loss_a"] = round(sp * 0.98, 2)
+                result["take_profit_a"] = round(rs * 1.01, 2)
+                result["stop_loss_b"] = round(current_price - (rs - sp) * 0.5, 2)
+                result["take_profit_b"] = round(rs * 1.03, 2)
+                result["stop_loss_c"] = round(sp * 0.96, 2)
+                result["take_profit_c1"] = round(rs * 1.02, 2)
+                result["take_profit_c2"] = round(rs * 1.05, 2)
+            elif final_trade_point in ("sell", "strong_sell"):
+                result["stop_loss_a"] = round(rs * 1.02, 2)
+                result["take_profit_a"] = round(sp * 0.99, 2)
+                result["stop_loss_b"] = round(rs * 1.04, 2)
+                result["take_profit_b"] = round(sp * 0.97, 2)
+                result["stop_loss_c"] = round(rs * 1.03, 2)
+                result["take_profit_c1"] = round(sp * 0.98, 2)
+                result["take_profit_c2"] = round(sp * 0.95, 2)
         # V5.24: API层预渲染完整报告，Agent只需原样输出 formatted_report
         result["formatted_report"] = build_formatted_report(result)
         return result
