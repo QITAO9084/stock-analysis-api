@@ -15,7 +15,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.25.2"
+    version="5.25.3"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -699,7 +699,19 @@ def build_formatted_report(fields: dict) -> str:
     mkt_grade = fields.get("market_grade", "N/A") or "N/A"
 
     # ADX 备注
-    adx_note = "⚠️ 震荡市，趋势信号可信度低，建议观望或减小仓位" if adx < 25 else "✅ 趋势明确，信号可信度高"
+    adx_trend = str(fields.get("adx_trend", ""))
+    trend_is_bull = "bull" in adx_trend.lower() and "bear" not in adx_trend.lower()
+    trend_is_bear = "bear" in adx_trend.lower()
+    signal_is_bearish = signal in ("SELL", "STRONG_SELL")
+    signal_is_bullish = signal in ("BUY", "STRONG_BUY")
+    counter_trend = (trend_is_bull and signal_is_bearish) or (trend_is_bear and signal_is_bullish)
+
+    if adx < 25:
+        adx_note = "⚠️ 震荡市，趋势信号可信度低，建议观望或减小仓位"
+    elif counter_trend:
+        adx_note = f"⚠️ 逆势操作！ADX 显示{adx_trend}趋势，{signal}信号为逆势交易，风险极高，建议减仓或观望"
+    else:
+        adx_note = "✅ 趋势明确，信号可信度高"
 
     # 市值格式化
     market_cap = fields.get("market_cap", 0) or 0
@@ -794,7 +806,7 @@ def build_formatted_report(fields: dict) -> str:
             for acc in accounts:
                 risk_amount = acc * 0.02
                 shares = int(risk_amount / dist_a)
-                pos_lines.append(f"  ${acc/1000:.0f}K 账户：{shares} 股（风险 ¥{risk_amount:.0f}）")
+                pos_lines.append(f"  ${acc/1000:.0f}K 账户：{shares} 股（风险 {currency}{risk_amount:.0f}）")
             position_text = f"""
 ━━━━━━━━━━━━━━━━━━
 💰 仓位管理（单笔风险≤2%，基于方案A止损 {dist_a:.2f} {currency}）
@@ -1911,7 +1923,19 @@ def run_backtest(data, symbol: str, days: int = 60) -> dict:
     currency = str(fields.get("currency", "USD"))
 
     # ADX 备注
-    adx_note = "⚠️ 震荡市，趋势信号可信度低，建议观望或减小仓位" if adx < 25 else "✅ 趋势明确，信号可信度高"
+    adx_trend2 = str(fields.get("adx_trend", ""))
+    trend_is_bull2 = "bull" in adx_trend2.lower() and "bear" not in adx_trend2.lower()
+    trend_is_bear2 = "bear" in adx_trend2.lower()
+    signal_is_bearish2 = signal in ("SELL", "STRONG_SELL")
+    signal_is_bullish2 = signal in ("BUY", "STRONG_BUY")
+    counter_trend2 = (trend_is_bull2 and signal_is_bearish2) or (trend_is_bear2 and signal_is_bullish2)
+
+    if adx < 25:
+        adx_note = "⚠️ 震荡市，趋势信号可信度低，建议观望或减小仓位"
+    elif counter_trend2:
+        adx_note = f"⚠️ 逆势操作！ADX 显示{adx_trend2}趋势，{signal}信号为逆势交易，风险极高，建议减仓或观望"
+    else:
+        adx_note = "✅ 趋势明确，信号可信度高"
 
     # 市值格式化
     market_cap = fields.get("market_cap", 0) or 0

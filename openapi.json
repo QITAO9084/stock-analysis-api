@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.25.2（恢复被误删的 build_formatted_report 函数，含大盘因子+仓位引擎）",
-    "version": "5.25.2"
+    "description": "股票/加密货币分析API - V5.25.3（修复仓位¥→$ + 逆势交易ADX警告）",
+    "version": "5.25.3"
   },
   "servers": [
     {
