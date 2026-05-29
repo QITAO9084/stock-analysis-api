@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.24.3（按需导入降低启动内存，解决Railway 502问题）",
-    "version": "5.24.3"
+    "description": "股票/加密货币分析API - V5.25.0（实盘增强：盈亏比过滤+60日回测+大盘因子+仓位引擎）",
+    "version": "5.25.0"
   },
   "servers": [
     {
@@ -259,6 +259,65 @@
               "type": "string",
               "default": "us",
               "title": "Market"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stock/backtest": {
+      "get": {
+        "summary": "Backtest Signals",
+        "description": "信号回测：统计过去N天BUY/SELL信号的命中率\n\n逐日基于当时可用的K线生成信号，统计方向与次日涨跌的一致性。\n\n- **symbol**: 股票代码（如 AAPL, TSLA, 600519）\n- **market**: 市场（us/hk/cn）\n- **days**: 回测天数（默认60，最大120）",
+        "operationId": "backtest_signals_stock_backtest_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "AAPL",
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "us",
+              "title": "Market"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 60,
+              "title": "Days"
             }
           }
         ],
