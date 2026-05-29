@@ -1338,7 +1338,13 @@ def detect_trade_points(data, symbol):
     # 建议价格（基于近期高低点）
     recent_low = data['Low'].tail(20).min()
     recent_high = data['High'].tail(20).max()
-    atr = (data['High'].tail(14).max() - data['Low'].tail(14).min()) / 14  # 简化ATR
+    # 正确 ATR：True Range + EMA（对齐calculate_adx，修复盈亏比倒挂）
+    atr_tr = pd.concat([
+        data['High'] - data['Low'],
+        (data['High'] - data['Close'].shift(1)).abs(),
+        (data['Low'] - data['Close'].shift(1)).abs()
+    ], axis=1).max(axis=1)
+    atr = round(float(atr_tr.ewm(span=14, adjust=False).mean().iloc[-1]), 2)
 
     if trade_point in ("strong_buy", "buy"):
         entry_price = round(current_price * 0.995, 2)   # 稍低于当前价
@@ -1358,11 +1364,14 @@ def detect_trade_points(data, symbol):
     ma20 = data['Close'].rolling(window=20).mean().iloc[-1] if len(data) >= 20 else current_price
     ma50 = data['Close'].rolling(window=50).mean().iloc[-1] if len(data) >= 50 else current_price
     all_time_high = data['High'].max() if len(data) > 0 else current_price
-    atr_val = (data['High'].tail(14).max() - data['Low'].tail(14).min()) / 14
+    atr_val = atr  # 复用上方已计算的标准 ATR（True Range + EMA）
 
     # 方案A：收紧止损（激进，风险回报比 1:2.6）
     if trade_point in ("strong_buy", "buy"):
         stop_loss_a = round(ma20 * 0.99, 2)          # MA20下方1%
+        # 兜底：MA20偏离当前价超过ATR×3时，用ATR×2止损（防盈亏比倒挂）
+        if current_price - stop_loss_a > atr_val * 3:
+            stop_loss_a = round(current_price - atr_val * 2, 2)
         take_profit_a = round(current_price + atr_val * 3, 2)  # 3倍ATR
         entry_a = round(current_price * 0.995, 2)
     elif trade_point in ("strong_sell", "sell"):
