@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.12（全端预渲染：7个端点全部输出 formatted_report，Agent 只做管道转发）",
+    "description": "股票/加密货币分析API - V5.24（analyze2端点新增 formatted_report 字段，API层预渲染完整报告，Agent 只做管道转发）",
     "version": "5.12.0"
   },
   "servers": [

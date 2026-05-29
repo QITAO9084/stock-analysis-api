@@ -18,7 +18,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.2.0"
+    version="5.24.0"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -767,7 +767,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
                     final_trade_point = "sell"
                     final_trade_point_cn = f"建议卖出（ADX={adx_val}，{adx_trend}）"
 
-        return {
+        result = {
             # 基础信息
             "symbol": str(symbol),
             "name": str(info.get("longName", "N/A")),
@@ -837,6 +837,9 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
             # K线（文本格式）
             "kline_text": "\n".join(kline_text_lines),
         }
+        # V5.24: API层预渲染完整报告，Agent只需原样输出 formatted_report
+        result["formatted_report"] = build_formatted_report(result)
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -1427,6 +1430,133 @@ def detect_trade_points(data, symbol):
         "take_profit_c2": take_profit_c2,
     }
 
+
+def build_formatted_report(fields: dict) -> str:
+    """预渲染完整技术分析报告，Agent 直接原样输出。
+
+    所有计算逻辑在 API 层完成，Agent 只是一个管道。
+    """
+    signal = str(fields.get("signal", "N/A"))
+    adx = fields.get("adx", 0)
+    currency = str(fields.get("currency", "USD"))
+
+    # ADX 备注
+    adx_note = "⚠️ 震荡市，趋势信号可信度低，建议观望或减小仓位" if adx < 25 else "✅ 趋势明确，信号可信度高"
+
+    # 市值格式化
+    market_cap = fields.get("market_cap", 0) or 0
+    if market_cap >= 1e12:
+        market_cap_display = f"{market_cap/1e12:.2f}万亿"
+    elif market_cap >= 1e8:
+        market_cap_display = f"{market_cap/1e8:.2f}亿"
+    else:
+        market_cap_display = "N/A"
+
+    pe = fields.get("pe_ratio", 0) or 0
+    pe_display = f"{pe:.2f}" if pe else "N/A"
+
+    # 三套方案字段
+    entry_a = fields.get("entry_a", 0) or 0
+    stop_loss_a = fields.get("stop_loss_a", 0) or 0
+    take_profit_a = fields.get("take_profit_a", 0) or 0
+    entry_b = fields.get("entry_b", 0) or 0
+    stop_loss_b = fields.get("stop_loss_b", 0) or 0
+    take_profit_b = fields.get("take_profit_b", 0) or 0
+    entry_c1 = fields.get("entry_c1", 0) or 0
+    entry_c2 = fields.get("entry_c2", 0) or 0
+    stop_loss_c = fields.get("stop_loss_c", 0) or 0
+    take_profit_c1 = fields.get("take_profit_c1", 0) or 0
+    take_profit_c2 = fields.get("take_profit_c2", 0) or 0
+
+    # ADX<25 震荡市 → 三套方案显示警告
+    if adx < 25:
+        plans_text = f"""      ⚠️ ADX震荡市（ADX={adx:.1f}），趋势不明朗
+      建议：观望等待突破，或减小仓位（≤30%）
+      若必须操作：严格止损，快进快出"""
+    elif entry_a == 0:
+        # 数据缺失时的兜底
+        plans_text = "      ⚠️ 估算值，仅供参考（入场价格数据不足，三套方案暂不提供具体数值）"
+    else:
+        # 方案A
+        dist_a = abs(entry_a - stop_loss_a)
+        tp_a = abs(take_profit_a - entry_a)
+        dist_a_pct = dist_a / entry_a * 100
+        tp_a_pct = tp_a / entry_a * 100
+        rr_a = tp_a / dist_a if dist_a > 0 else 0
+
+        # 方案B
+        dist_b = abs(entry_b - stop_loss_b)
+        tp_b = abs(take_profit_b - entry_b)
+        dist_b_pct = dist_b / entry_b * 100 if entry_b else 0
+        tp_b_pct = tp_b / entry_b * 100 if entry_b else 0
+        rr_b = tp_b / dist_b if dist_b > 0 else 0
+
+        plans_text = f"""【方案A】收紧止损（激进，风险回报比 1:2.6）
+  入场价：{entry_a:.2f} {currency}
+  止损位：{stop_loss_a:.2f} {currency}（距入场 {dist_a_pct:.1f}%）
+  止盈位：{take_profit_a:.2f} {currency}（距入场 {tp_a_pct:.1f}%，盈亏比 1:{rr_a:.1f}）
+  💡 适用场景：ADX≥25 强趋势，顺势操作（{signal}方向）
+
+【方案B】上调止盈（保守，用远期强阻力）
+  入场价：{entry_b:.2f} {currency}
+  止损位：{stop_loss_b:.2f} {currency}（距入场 {dist_b_pct:.1f}%，较方案A放宽）
+  止盈位：{take_profit_b:.2f} {currency}（距入场 {tp_b_pct:.1f}%，盈亏比 1:{rr_b:.1f}）
+  💡 适用场景：任何信号下，用远期阻力位/支撑位/ATR目标做保守止盈止损，较方案A放宽约束
+
+【方案C】分层仓位（动态止损）
+  第一批入场：{entry_c1:.2f} {currency}（仓位 40%）
+  第二批入场：{entry_c2:.2f} {currency}（仓位 60%，分批降本）
+  动态止损：{stop_loss_c:.2f} {currency}（跌破后不再持有）
+  第一批止盈：{take_profit_c1:.2f} {currency}
+  第二批止盈：{take_profit_c2:.2f} {currency}
+  💡 适用场景：价格处于关键支撑/阻力附近，不确定突破方向"""
+
+    change_pct = fields.get("change_percent", 0) or 0
+
+    report = f"""【{fields.get('name', 'N/A')}（{fields.get('symbol', 'N/A')}）技术分析报告】
+生成时间：{fields.get('analysis_time', 'N/A')}
+当前价格：{fields.get('current_price', 0):.2f} {currency}  ({change_pct:+.2f}%)
+ADX趋势强度：{adx:.1f}（{fields.get('adx_trend', 'N/A')}）| 14维评分：{fields.get('trade_score', 0)}/100
+
+━━━━━━━━━━━━━━━━━━
+📊 信号诊断
+━━━━━━━━━━━━━━━━━━
+信号(signal)：{signal}
+置信度(confidence)：{fields.get('confidence', 'N/A')}
+买卖点(trade_point)：{fields.get('trade_point_cn', 'N/A')}
+关键信号：{fields.get('key_signals_text', 'N/A')}
+
+━━━━━━━━━━━━━━━━━━
+🎯 交易方案（三套）
+━━━━━━━━━━━━━━━━━━
+
+{plans_text}
+
+━━━━━━━━━━━━━━━━━━
+📈 技术指标速查
+━━━━━━━━━━━━━━━━━━
+RSI(14)：{fields.get('rsi', 0):.2f}（前期 {fields.get('rsi_prev', 0):.2f}，变动 {fields.get('rsi_delta', 0):+.2f}）| MACD：{fields.get('macd_value', 0):.4f} | 信号线：{fields.get('macd_signal', 0):.4f} | 柱状 {fields.get('macd_histogram', 0):+.4f} {fields.get('macd_cross', 'none')}
+KDJ：K={fields.get('kdj_k', 0):.1f} D={fields.get('kdj_d', 0):.1f} J={fields.get('kdj_j', 0):.1f}
+布林带：上轨 {fields.get('boll_upper', 0):.2f} | 中轨 {fields.get('boll_middle', 0):.2f} | 下轨 {fields.get('boll_lower', 0):.2f}
+均线：MA5={fields.get('ma5', 0):.2f} | MA10={fields.get('ma10', 0):.2f} | MA20={fields.get('ma20', 0):.2f} | MA50={fields.get('ma50', 0):.2f}
+
+━━━━━━━━━━━━━━━━━━
+📰 K线形态
+━━━━━━━━━━━━━━━━━━
+{fields.get('kline_text', '')}
+
+━━━━━━━━━━━━━━━━━━
+⚠️ 风险提示
+━━━━━━━━━━━━━━━━━━
+- ADX={adx:.1f}（{fields.get('adx_trend', 'N/A')}）→ {adx_note}
+- 成交量：{fields.get('volume_signal', 'N/A')}，量比 {fields.get('volume_ratio', 0):.1f}x
+- 支撑位：{fields.get('support_level', 0):.2f} | 阻力位：{fields.get('resistance_level', 0):.2f}
+- 52周高：{fields.get('week52_high', 0):.2f} | 52周低：{fields.get('week52_low', 0):.2f}
+- 市值：{market_cap_display} {currency} | 市盈率：{pe_display}"""
+
+    return report
+
+
 def normalize_stock_symbol(symbol: str, market: str = "us") -> tuple:
     """
     标准化股票代码，自动补全市场后缀
@@ -1581,7 +1711,8 @@ def scan_stocks(
             "top_buy": buy_stocks[:3] if buy_stocks else [],
             "top_sell": sell_stocks[:3] if sell_stocks else [],
             "all_signals": results,
-            "scan_time": datetime.now().isoformat()
+            "scan_time": datetime.now().isoformat(),
+            "symbols_scanned": ",".join([s[0] for s in normalized]),
         }
 
     except Exception as e:
