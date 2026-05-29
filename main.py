@@ -15,7 +15,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.25.3"
+    version="5.25.4"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1752,81 +1752,101 @@ def detect_trade_points(data, symbol):
 
 
 def get_market_trend(market: str) -> dict:
-    """获取大盘环境因子。
+    """获取大盘环境因子（带重试+备用Session）。
 
     根据市场获取对应指数，计算趋势方向和强度，
     返回大盘评级和评分乘数。
     - us → 标普500 (^GSPC)
     - hk → 恒生指数 (^HSI)
     - cn → 上证指数 (000001.SS)
+
+    V5.25.4: 使用 yf.Ticker（非 download）+ 重试 + 延迟，
+    避免 Railway IP 被 Yahoo 限流导致大盘数据持续为空。
     """
     import yfinance as yf
-    
+    import time as _time
+
     index_map = {
         "us": ("^GSPC", "标普500"),
         "hk": ("^HSI", "恒生指数"),
         "cn": ("000001.SS", "上证指数"),
     }
-    
+
     if market not in index_map:
-        return {"trend": "unknown", "multiplier": 1.0, "name": "未知", "index_price": 0}
-    
-    ticker, name = index_map[market]
-    
-    try:
-        data = yf.download(ticker, period="3mo", progress=False, auto_adjust=True)
-        if data is None or len(data) < 20:
-            return {"trend": "unknown", "multiplier": 1.0, "name": name, "index_price": 0}
-        
-        current_close = float(data["Close"].iloc[-1])
-        ma20 = float(data["Close"].rolling(20).mean().iloc[-1])
-        ma50 = float(data["Close"].rolling(50).mean().iloc[-1]) if len(data) >= 50 else ma20
-        
-        # 30日涨跌幅
-        if len(data) >= 30:
-            close_30d_ago = float(data["Close"].iloc[-30])
-            change_30d = (current_close - close_30d_ago) / close_30d_ago * 100
-        else:
-            change_30d = 0
-        
-        # 趋势判定
-        above_ma20 = current_close > ma20
-        above_ma50 = current_close > ma50
-        ma_bullish = ma20 > ma50
-        
-        if above_ma20 and above_ma50 and ma_bullish and change_30d > 0:
-            trend = "bull"
-            grade = "强势多头"
-            multiplier = 1.1
-        elif above_ma20 and above_ma50:
-            trend = "mild_bull"
-            grade = "温和偏多"
-            multiplier = 1.05
-        elif not above_ma20 and not above_ma50 and change_30d < -3:
-            trend = "bear"
-            grade = "弱势空头"
-            multiplier = 0.85
-        elif not above_ma20 and not above_ma50:
-            trend = "mild_bear"
-            grade = "温和偏空"
-            multiplier = 0.90
-        else:
-            trend = "neutral"
-            grade = "震荡整理"
-            multiplier = 1.0
-        
-        return {
-            "trend": trend,
-            "grade": grade,
-            "multiplier": multiplier,
-            "name": name,
-            "index_price": round(current_close, 2),
-            "change_30d": round(change_30d, 2),
-            "ma20": round(ma20, 2),
-            "ma50": round(ma50, 2) if len(data) >= 50 else 0,
-        }
-    except Exception:
-        return {"trend": "error", "grade": "N/A", "multiplier": 1.0, "name": name, "index_price": 0, "change_30d": 0}
+        return {"trend": "unknown", "grade": "N/A", "multiplier": 1.0, "name": "未知", "index_price": 0, "change_30d": 0}
+
+    ticker_symbol, name = index_map[market]
+
+    # 重试 3 次，指数退避：2s → 4s → 8s
+    for attempt in range(3):
+        try:
+            # 每次重试前等待（避免 burst）
+            if attempt > 0:
+                wait = 2 ** (attempt + 1)  # 4s, 8s
+                _time.sleep(wait)
+            else:
+                # 首次尝试也等 1.5s，避免和股票数据请求撞车
+                _time.sleep(1.5)
+
+            # 每次重试用新的 Ticker 实例（独立 Session）
+            ticker = yf.Ticker(ticker_symbol)
+            data = ticker.history(period="3mo")
+
+            if data is None or len(data) < 20:
+                continue  # 数据不足，重试
+
+            current_close = float(data["Close"].iloc[-1])
+            ma20 = float(data["Close"].rolling(20).mean().iloc[-1])
+            ma50 = float(data["Close"].rolling(50).mean().iloc[-1]) if len(data) >= 50 else ma20
+
+            # 30日涨跌幅
+            if len(data) >= 30:
+                close_30d_ago = float(data["Close"].iloc[-30])
+                change_30d = (current_close - close_30d_ago) / close_30d_ago * 100
+            else:
+                change_30d = 0
+
+            # 趋势判定
+            above_ma20 = current_close > ma20
+            above_ma50 = current_close > ma50
+            ma_bullish = ma20 > ma50
+
+            if above_ma20 and above_ma50 and ma_bullish and change_30d > 0:
+                trend = "bull"
+                grade = "强势多头"
+                multiplier = 1.1
+            elif above_ma20 and above_ma50:
+                trend = "mild_bull"
+                grade = "温和偏多"
+                multiplier = 1.05
+            elif not above_ma20 and not above_ma50 and change_30d < -3:
+                trend = "bear"
+                grade = "弱势空头"
+                multiplier = 0.85
+            elif not above_ma20 and not above_ma50:
+                trend = "mild_bear"
+                grade = "温和偏空"
+                multiplier = 0.90
+            else:
+                trend = "neutral"
+                grade = "震荡整理"
+                multiplier = 1.0
+
+            return {
+                "trend": trend,
+                "grade": grade,
+                "multiplier": multiplier,
+                "name": name,
+                "index_price": round(current_close, 2),
+                "change_30d": round(change_30d, 2),
+                "ma20": round(ma20, 2),
+                "ma50": round(ma50, 2) if len(data) >= 50 else 0,
+            }
+        except Exception:
+            continue  # 失败→重试
+
+    # 3 次全失败，优雅降级
+    return {"trend": "error", "grade": "N/A", "multiplier": 1.0, "name": name, "index_price": 0, "change_30d": 0}
 
 
 def run_backtest(data, symbol: str, days: int = 60) -> dict:

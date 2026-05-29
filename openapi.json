@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.25.3（修复仓位¥→$ + 逆势交易ADX警告）",
-    "version": "5.25.3"
+    "description": "股票/加密货币分析API - V5.25.4（大盘环境重试+延迟机制，解决 Railway IP 被 yfinance 限流）",
+    "version": "5.25.4"
   },
   "servers": [
     {
