@@ -1347,17 +1347,61 @@ def detect_trade_points(data, symbol):
     atr = round(float(atr_tr.ewm(span=14, adjust=False).mean().iloc[-1]), 2)
 
     if trade_point in ("strong_buy", "buy"):
+        # === BUY: 单套方案（旧版兼容） ===
         entry_price = round(current_price * 0.995, 2)   # 稍低于当前价
         stop_loss = round(recent_low * 0.98, 2)          # 近期低点下方2%
         take_profit = round(current_price + atr * 3, 2)  # 3倍ATR
+        # === 三套方案（V5.23 新增） ===
+        # 方案A：收紧止损（激进）
+        entry_a = round(current_price * 0.998, 2)
+        stop_loss_a = round(recent_low * 0.97, 2)
+        take_profit_a = round(current_price + atr * 1.5, 2)
+        # 方案B：上调止盈（保守，用远期阻力）
+        entry_b = round(current_price * 0.995, 2)
+        stop_loss_b = round(recent_low * 0.95, 2)
+        take_profit_b = round(recent_high + atr * 1.0, 2)
+        # 方案C：分层仓位
+        entry_c1 = round(current_price * 0.998, 2)
+        entry_c2 = round(recent_low * 1.02, 2)
+        stop_loss_c = round(recent_low * 0.96, 2)
+        take_profit_c1 = round(current_price + atr * 1.5, 2)
+        take_profit_c2 = round(recent_high + atr * 1.0, 2)
     elif trade_point in ("strong_sell", "sell"):
-        entry_price = 0  # 卖出不需要入场价
-        stop_loss = 0
-        take_profit = round(recent_low * 1.02, 2)       # 回落到近期低点附近
+        # === SELL: 单套方案（旧版兼容，修复非零） ===
+        entry_price = round(current_price, 2)            # 当前价卖出
+        stop_loss = round(recent_high * 1.02, 2)         # 止损：站上近期高点上方
+        take_profit = round(recent_low * 1.02, 2)        # 止盈：回落至近期低点附近
+        # === 三套方案（V5.23 新增） ===
+        # 方案A：收紧止损（激进，Quick Exit）
+        entry_a = round(current_price, 2)
+        stop_loss_a = round(current_price * 1.03, 2)
+        take_profit_a = round(recent_low * 1.01, 2)
+        # 方案B：上调止盈（保守，用远期支撑）
+        entry_b = round(current_price, 2)
+        stop_loss_b = round(recent_high * 1.05, 2)
+        take_profit_b = round(recent_low * 0.98, 2)
+        # 方案C：分层仓位
+        entry_c1 = round(current_price, 2)
+        entry_c2 = round(current_price * 1.015, 2)
+        stop_loss_c = round(recent_high * 1.03, 2)
+        take_profit_c1 = round(recent_low * 1.02, 2)
+        take_profit_c2 = round(recent_low * 0.98, 2)
     else:
         entry_price = 0
         stop_loss = round(recent_low * 0.97, 2)
         take_profit = round(recent_high * 1.03, 2)
+        # === HOLD: 三套方案设为参考区间（entry = current_price 以便计算百分比） ===
+        entry_a = round(current_price, 2)
+        stop_loss_a = round(recent_low * 0.97, 2)
+        take_profit_a = round(recent_high * 1.03, 2)
+        entry_b = round(current_price, 2)
+        stop_loss_b = round(recent_low * 0.95, 2)
+        take_profit_b = round(recent_high * 1.06, 2)
+        entry_c1 = round(current_price, 2)
+        entry_c2 = round(current_price * 0.99, 2)
+        stop_loss_c = round(recent_low * 0.96, 2)
+        take_profit_c1 = round(recent_high * 1.03, 2)
+        take_profit_c2 = round(recent_high * 1.07, 2)
 
     # ========= 三套交易方案（V5.21 新增）==========
     # 基于当前价、近期高低点、均线计算三套方案的止损/止盈
@@ -1431,7 +1475,7 @@ def detect_trade_points(data, symbol):
         "stop_loss": stop_loss,
         "take_profit": take_profit,
         "score": score,
-        # V5.21 三套方案
+        # V5.23: 三套方案字段
         "entry_a": entry_a,
         "stop_loss_a": stop_loss_a,
         "take_profit_a": take_profit_a,
@@ -1444,7 +1488,6 @@ def detect_trade_points(data, symbol):
         "take_profit_c1": take_profit_c1,
         "take_profit_c2": take_profit_c2,
     }
-
 
 def normalize_stock_symbol(symbol: str, market: str = "us") -> tuple:
     """
@@ -1557,6 +1600,18 @@ def scan_stocks(
                     "entry_price": trade_points["entry_price"],
                     "stop_loss": trade_points["stop_loss"],
                     "take_profit": trade_points["take_profit"],
+                    # V5.23: 三套方案字段
+                    "entry_a": trade_points["entry_a"],
+                    "stop_loss_a": trade_points["stop_loss_a"],
+                    "take_profit_a": trade_points["take_profit_a"],
+                    "entry_b": trade_points["entry_b"],
+                    "stop_loss_b": trade_points["stop_loss_b"],
+                    "take_profit_b": trade_points["take_profit_b"],
+                    "entry_c1": trade_points["entry_c1"],
+                    "entry_c2": trade_points["entry_c2"],
+                    "stop_loss_c": trade_points["stop_loss_c"],
+                    "take_profit_c1": trade_points["take_profit_c1"],
+                    "take_profit_c2": trade_points["take_profit_c2"],
                     "buy_reasons_text": "；".join(trade_points["buy_reasons"]) if trade_points["buy_reasons"] else "",
                     "sell_reasons_text": "；".join(trade_points["sell_reasons"]) if trade_points["sell_reasons"] else "",
                     "rsi": round(signal_data["indicators"]["rsi"], 2),
@@ -1665,6 +1720,18 @@ def get_trade_point_flat(symbol: str = "AAPL", market: str = "us"):
             "entry_price": trade_points["entry_price"],
             "stop_loss": trade_points["stop_loss"],
             "take_profit": trade_points["take_profit"],
+            # V5.23: 三套方案字段
+            "entry_a": trade_points["entry_a"],
+            "stop_loss_a": trade_points["stop_loss_a"],
+            "take_profit_a": trade_points["take_profit_a"],
+            "entry_b": trade_points["entry_b"],
+            "stop_loss_b": trade_points["stop_loss_b"],
+            "take_profit_b": trade_points["take_profit_b"],
+            "entry_c1": trade_points["entry_c1"],
+            "entry_c2": trade_points["entry_c2"],
+            "stop_loss_c": trade_points["stop_loss_c"],
+            "take_profit_c1": trade_points["take_profit_c1"],
+            "take_profit_c2": trade_points["take_profit_c2"],
             # 核心指标（扁平化）
             "rsi": round(indicators["rsi"], 2),
             "rsi_prev": round(indicators["rsi_prev"], 2),
