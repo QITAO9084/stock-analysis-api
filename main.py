@@ -1,9 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-import yfinance as yf
-import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 from typing import Optional
 import time
@@ -18,7 +15,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.24.1"
+    version="5.24.3"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -86,6 +83,7 @@ def fetch_yf_data(symbol: str, period: str = "6mo"):
     如果全部重试失败且有过期缓存，返回过期缓存（降级）
     如果既无缓存也无数据，抛出最后的异常
     """
+    import yfinance as yf  # 按需导入，降低启动内存
     key = _cache_key(symbol)
     now = time.time()
 
@@ -147,6 +145,7 @@ def fetch_yf_data(symbol: str, period: str = "6mo"):
 
 def calculate_rsi(data, period=14):
     """计算RSI指标（返回完整序列，用于趋势判断）"""
+    import pandas as pd  # 按需导入
     delta = data['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -233,6 +232,7 @@ def calculate_volume_signal(data):
 # V5.20.20: ADX 趋势强度计算
 def calculate_adx(data, period=14):
     """计算 ADX 趋势强度指标（Wilder's DMI）"""
+    import pandas as pd  # 按需导入
     if len(data) < period * 2:
         return {"adx": 0, "plus_di": 0, "minus_di": 0, "trend": "ranging"}
 
@@ -277,6 +277,7 @@ def get_trading_signal(data, symbol):
     生成交易信号（V2增强版）
     新增：MACD交叉检测、KDJ评分、RSI趋势、成交量确认、MA50大趋势
     """
+    import pandas as pd  # 按需导入
     current_price = data['Close'].iloc[-1]
     ma5 = data['Close'].rolling(window=5).mean().iloc[-1]
     ma10 = data['Close'].rolling(window=10).mean().iloc[-1]
@@ -1227,6 +1228,7 @@ def detect_trade_points(data, symbol):
     - take_profit: 建议止盈价
     - score: 综合评分 (-10 ~ +10)
     """
+    import pandas as pd  # 按需导入
     current_price = data['Close'].iloc[-1]
     prev_close = data['Close'].iloc[-2] if len(data) > 1 else current_price
     is_green = current_price > data['Open'].iloc[-1] if len(data) > 1 else True
