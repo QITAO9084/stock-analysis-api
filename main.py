@@ -15,7 +15,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.25.0"
+    version="5.25.1"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1639,7 +1639,7 @@ def get_market_trend(market: str) -> dict:
             "ma50": round(ma50, 2) if len(data) >= 50 else 0,
         }
     except Exception:
-        return {"trend": "error", "multiplier": 1.0, "name": name, "index_price": 0}
+        return {"trend": "error", "grade": "N/A", "multiplier": 1.0, "name": name, "index_price": 0, "change_30d": 0}
 
 
 def run_backtest(data, symbol: str, days: int = 60) -> dict:
