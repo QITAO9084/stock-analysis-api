@@ -15,7 +15,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.28.1"
+    version="5.28.2"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1697,12 +1697,17 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us", holdings
     if market == "auto" or not market:
         market = "us"
 
+    # DEBUG: 确认 holdings 参数是否被 Coze Agent 传递
+    print(f"[COMPARE DEBUG] raw holdings param: '{holdings}' (type: {type(holdings).__name__}, len: {len(holdings) if holdings else 0})")
+
     # 解析持仓
     holdings_list = None
     if holdings:
         try:
             holdings_list = json.loads(holdings)
-        except (json.JSONDecodeError, TypeError):
+            print(f"[COMPARE DEBUG] parsed {len(holdings_list)} holding(s)")
+        except (json.JSONDecodeError, TypeError) as e:
+            print(f"[COMPARE DEBUG] holdings parse failed: {e}")
             holdings_list = None
 
     # 大盘环境
