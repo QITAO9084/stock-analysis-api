@@ -7,8 +7,12 @@
   },
   "servers": [
     {
+      "url": "https://brilliant-strength.railway.app",
+      "description": "Railway（主）"
+    },
+    {
       "url": "https://stock-analysis-api-n741.onrender.com",
-      "description": "Render"
+      "description": "Render（备）"
     }
   ],
   "paths": {
