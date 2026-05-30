@@ -7,8 +7,8 @@
   },
   "servers": [
     {
-      "url": "https://stock-analysis-api-n741.onrender.com",
-      "description": "Render"
+      "url": "https://web-production-e9fcc.up.railway.app",
+      "description": "Railway"
     }
   ],
   "paths": {
