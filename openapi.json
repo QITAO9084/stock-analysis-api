@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.12（全端预渲染：7个端点全部输出 formatted_report，Agent 只做管道转发）",
-    "version": "5.12.0"
+    "description": "股票/加密货币分析API - V5.32.1（修复SELL仓位+BUY保底仓位）",
+    "version": "5.32.1"
   },
   "servers": [
     {
@@ -22,7 +22,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           }
@@ -61,7 +61,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -120,7 +120,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -169,7 +169,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -218,7 +218,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -238,7 +238,7 @@
     "/stock/analyze2": {
       "get": {
         "summary": "Analyze Stock Flat",
-        "description": "扁平化股票分析接口（专为 Coze 插件优化）\n\n所有字段扁平返回，避免嵌套 Object/Array 导致 Coze 解析问题。\nCoze 插件只需配置 String 和 Number 类型的输出参数。\n\n- **symbol**: 股票代码（如 AAPL, 00700.HK）\n- **market**: 市场（us/hk/cn）",
+        "description": "扁平化股票分析接口（专为 Coze 插件优化）\n\n所有字段扁平返回，避免嵌套 Object/Array 导致 Coze 解析问题。\nCoze 插件只需配置 String 和 Number 类型的输出参数。\n\n- **symbol**: 股票代码（如 AAPL, 00700.HK）\n- **market**: 市场（us/hk/cn）\n- **holdings**: 持仓信息（可选），JSON 格式: [{\"symbol\":\"TSLA\",\"shares\":10,\"cost\":420.5}]",
         "operationId": "analyze_stock_flat_stock_analyze2_get",
         "parameters": [
           {
@@ -260,6 +260,26 @@
               "default": "us",
               "title": "Market"
             }
+          },
+          {
+            "name": "holdings",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Holdings"
+            }
+          },
+          {
+            "name": "total_capital",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 6400,
+              "title": "Total Capital"
+            }
           }
         ],
         "responses": {
@@ -267,7 +287,102 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stock/portfolio": {
+      "get": {
+        "summary": "Portfolio Dashboard",
+        "description": "多股持仓面板 — 批量分析持仓状态。\\n\\n- **holdings**: 持仓信息，JSON 格式: [{\\\"symbol\\\":\\\"TSLA\\\",\\\"shares\\\":10,\\\"cost\\\":420.5}]",
+        "operationId": "get_portfolio_stock_portfolio_get",
+        "parameters": [
+          {
+            "name": "holdings",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Holdings"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "formatted_report": {
+                      "type": "string",
+                      "title": "Formatted Report"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stock/backtest": {
+      "get": {
+        "summary": "Backtest Signals",
+        "description": "信号回测：统计过去N天BUY/SELL信号的命中率\n\n逐日基于当时可用的K线生成信号，统计方向与次日涨跌的一致性。\n\n- **symbol**: 股票代码（如 AAPL, TSLA, 600519）\n- **market**: 市场（us/hk/cn）\n- **days**: 回测天数（默认60，最大120）",
+        "operationId": "backtest_signals_stock_backtest_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "AAPL",
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "us",
+              "title": "Market"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 60,
+              "title": "Days"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {"type": "object"}
               }
             }
           },
@@ -287,7 +402,7 @@
     "/stock/compare": {
       "get": {
         "summary": "Compare Stocks",
-        "description": "多股对比分析接口（专为 Coze 插件优化，扁平化返回）\n\n传入多个股票代码（逗号分隔），返回每只股票的核心指标对比。\n最多支持5只股票同时对比。\n\n- **symbols**: 股票代码，逗号分隔（如 \"AAPL,MSFT,GOOG\"）\n- **market**: 市场（us/hk）",
+        "description": "多股对比分析接口（管道转发版）\\n\\n传入多个股票代码（逗号分隔），返回格式化对比报告。\\n最多支持5只股票同时对比。\\n\\n- **symbols**: 股票代码，逗号分隔（如 \"AAPL,MSFT,GOOG\"）\\n- **market**: 市场（us/hk）\\n- **holdings**: 持仓信息（可选），JSON 格式: [{\\\"symbol\\\":\\\"TSLA\\\",\\\"shares\\\":10,\\\"cost\\\":420.5}]",
         "operationId": "compare_stocks_stock_compare_get",
         "parameters": [
           {
@@ -309,6 +424,26 @@
               "default": "us",
               "title": "Market"
             }
+          },
+          {
+            "name": "holdings",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Holdings"
+            }
+          },
+          {
+            "name": "total_capital",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 6400,
+              "title": "Total Capital"
+            }
           }
         ],
         "responses": {
@@ -316,7 +451,15 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "formatted_report": {
+                      "type": "string",
+                      "title": "Formatted Report"
+                    }
+                  }
+                }
               }
             }
           },
@@ -355,7 +498,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -394,7 +537,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -453,7 +596,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -502,7 +645,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -574,7 +717,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -676,7 +819,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -718,7 +861,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -760,7 +903,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -822,7 +965,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
@@ -894,7 +1037,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {"type": "object"}
               }
             }
           },
