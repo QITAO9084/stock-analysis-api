@@ -8,14 +8,14 @@ import json
 import sys
 import os as _os
 
-# V5.32.2: 仓位不足1股警告+SELL信号隐藏仓位管理表
+# V5.33.0: 持仓跟踪+交易日志复盘（portfolio CRUD + 绩效统计）
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.32.2"
+    version="5.33.0"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1949,6 +1949,389 @@ def get_portfolio(holdings: str = ""):
 
     report = "\n".join(panel_lines)
     return {"formatted_report": report}
+
+
+# ===== V5.33.0 持仓跟踪 & 交易日志 =====
+import uuid as _uuid
+from pathlib import Path as _Path
+
+_PORTFOLIO_FILE = _Path(__file__).parent / "portfolio.json"
+
+
+def _load_portfolio() -> dict:
+    """加载持仓状态文件"""
+    if _PORTFOLIO_FILE.exists():
+        with open(_PORTFOLIO_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"positions": [], "history": []}
+
+
+def _save_portfolio(data: dict):
+    """保存持仓状态文件"""
+    with open(_PORTFOLIO_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+
+
+def _get_current_price(symbol: str) -> float:
+    """获取当前价格（15分钟缓存版本）"""
+    try:
+        # 使用 yfinance 快速获取最新价格
+        ticker = yf.Ticker(symbol)
+        fast_info = ticker.fast_info
+        price = fast_info.get("lastPrice", 0) or fast_info.get("regularMarketPreviousClose", 0)
+        if not price or price <= 0:
+            # fallback: download 1d data
+            data = yf.download(symbol, period="1d", progress=False)
+            if not data.empty:
+                price = float(data["Close"].iloc[-1])
+        return float(price) if price else 0
+    except Exception:
+        return 0
+
+
+@app.post("/portfolio/open")
+def portfolio_open(
+    symbol: str = "AAPL",
+    entry_price: float = 0,
+    shares: int = 0,
+    stop_loss: float = 0,
+    take_profit: float = 0,
+    signal: str = "NEUTRAL",
+    rating: str = "C",
+    score: int = 0,
+    note: str = "",
+):
+    """开仓记录 — 持久化到 portfolio.json
+
+    - **symbol**: 股票代码
+    - **entry_price**: 入场价
+    - **shares**: 股数
+    - **stop_loss**: 止损价（0=不设止损）
+    - **take_profit**: 止盈价（0=不设止盈）
+    - **signal**: 入场时的信号（BUY/SELL/NEUTRAL）
+    - **rating**: 入场时的评级（A/B/C/D）
+    - **score**: 入场时的评分（0-100）
+    - **note**: 备注
+    """
+    if shares <= 0:
+        return {"status": "error", "message": "股数必须 > 0"}
+
+    sym, mkt = normalize_stock_symbol(symbol.strip().upper(), "us")
+    pf = _load_portfolio()
+
+    now = datetime.now()
+    pos_id = f"POS-{now.strftime('%Y%m%d%H%M%S')}-{_uuid.uuid4().hex[:4].upper()}"
+
+    pos = {
+        "id": pos_id,
+        "symbol": sym,
+        "display": symbol.strip().upper(),
+        "entry_price": entry_price,
+        "shares": shares,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "entry_date": now.isoformat(),
+        "signal": signal,
+        "rating": rating,
+        "score": score,
+        "note": note,
+    }
+    pf["positions"].append(pos)
+    _save_portfolio(pf)
+
+    # 计算初始成本
+    cost = entry_price * shares
+    return {
+        "status": "ok",
+        "position_id": pos_id,
+        "message": f"✅ 已记录开仓：{sym} {shares}股 @ ${entry_price:.2f}，成本 ${cost:,.0f}",
+        "position": pos,
+    }
+
+
+@app.get("/portfolio/status")
+def portfolio_status():
+    """持仓状态 — 实时拉取当前价格计算浮盈/浮亏 + 止损/止盈状态"""
+    pf = _load_portfolio()
+    positions = pf.get("positions", [])
+
+    if not positions:
+        return {"formatted_report": "📭 当前无持仓。", "positions": [], "summary": {}}
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = [f"📊 持仓跟踪（{now_str}）", ""]
+
+    total_cost = 0.0
+    total_value = 0.0
+    enriched = []
+
+    for pos in positions:
+        sym = pos["symbol"]
+        entry = pos["entry_price"]
+        shares = pos["shares"]
+        sl = pos.get("stop_loss", 0)
+        tp = pos.get("take_profit", 0)
+        entry_date = pos.get("entry_date", "")[:10]
+
+        # 获取现价
+        current = _get_current_price(sym)
+        cost = entry * shares
+        value = current * shares if current > 0 else cost
+        pnl = value - cost
+        pnl_pct = (pnl / cost * 100) if cost > 0 else 0
+
+        total_cost += cost
+        total_value += value
+
+        # 止损/止盈状态
+        alerts = []
+        if current > 0:
+            if sl > 0 and current <= sl:
+                alerts.append(f"🔴 触及止损价 ${sl:.2f}")
+            if tp > 0 and current >= tp:
+                alerts.append(f"🟢 触及止盈价 ${tp:.2f}")
+
+        pos_enriched = {
+            **pos,
+            "current_price": round(current, 2),
+            "pnl": round(pnl, 2),
+            "pnl_pct": round(pnl_pct, 2),
+            "cost": round(cost, 2),
+            "value": round(value, 2),
+            "alerts": alerts,
+            "days_held": (datetime.now().date() - datetime.fromisoformat(pos["entry_date"]).date()).days if pos.get("entry_date") else 0,
+        }
+        enriched.append(pos_enriched)
+
+        # 渲染行
+        pnl_str = f"${pnl:+,.0f}（{pnl_pct:+.1f}%）"
+        chg_str = "—"
+        if current > 0:
+            chg_str = f"${current:,.2f}"
+
+        alert_str = " ⚠️" + " ".join(alerts) if alerts else ""
+        entry_str = f"${entry:,.2f}"
+        lines.append(f"  {sym:<8} 现价 {chg_str:>10}  成本 {entry_str:>10}  {shares:>4}股  {pnl_str:>16}  持仓{pos_enriched['days_held']}天{alert_str}")
+
+    # 汇总
+    total_pnl = total_value - total_cost
+    total_pnl_pct = total_pnl / total_cost * 100 if total_cost > 0 else 0
+    lines.append("─" * 90)
+    lines.append(f"  合计：总成本 ${total_cost:,.0f} | 市值 ${total_value:,.0f} | 浮动盈亏 ${total_pnl:+,.0f}（{total_pnl_pct:+.1f}%）")
+
+    report = "\n".join(lines)
+    return {
+        "formatted_report": report,
+        "positions": enriched,
+        "summary": {
+            "total_positions": len(positions),
+            "total_cost": round(total_cost, 2),
+            "total_value": round(total_value, 2),
+            "total_pnl": round(total_pnl, 2),
+            "total_pnl_pct": round(total_pnl_pct, 2),
+        },
+    }
+
+
+@app.post("/portfolio/close")
+def portfolio_close(position_id: str = "", exit_price: float = 0, reason: str = "手动平仓"):
+    """平仓记录 — 从持仓中移除并写入交易日志
+
+    - **position_id**: 持仓ID（由 /portfolio/open 返回）
+    - **exit_price**: 出场价格
+    - **reason**: 平仓原因（默认：手动平仓）
+    """
+    if not position_id:
+        return {"status": "error", "message": "请提供 position_id"}
+
+    pf = _load_portfolio()
+    positions = pf.get("positions", [])
+
+    # 查找持仓
+    target = None
+    remaining = []
+    for pos in positions:
+        if pos["id"] == position_id:
+            target = pos
+        else:
+            remaining.append(pos)
+
+    if not target:
+        return {"status": "error", "message": f"未找到持仓 {position_id}"}
+
+    # 计算盈亏
+    entry = target["entry_price"]
+    shares = target["shares"]
+    cost = entry * shares
+    exit_val = exit_price * shares if exit_price > 0 else cost
+    pnl = exit_val - cost
+    pnl_pct = (pnl / cost * 100) if cost > 0 else 0
+
+    # 写入交易日志
+    now = datetime.now()
+    trade = {
+        "id": f"TRD-{now.strftime('%Y%m%d%H%M%S')}-{_uuid.uuid4().hex[:4].upper()}",
+        "symbol": target["symbol"],
+        "display": target.get("display", target["symbol"]),
+        "entry_price": entry,
+        "exit_price": exit_price,
+        "shares": shares,
+        "pnl": round(pnl, 2),
+        "pnl_pct": round(pnl_pct, 2),
+        "entry_date": target["entry_date"],
+        "exit_date": now.isoformat(),
+        "signal": target.get("signal", "NEUTRAL"),
+        "rating": target.get("rating", "C"),
+        "score": target.get("score", 0),
+        "reason": reason,
+        "days_held": (now.date() - datetime.fromisoformat(target["entry_date"]).date()).days if target.get("entry_date") else 0,
+    }
+
+    pf["positions"] = remaining
+    pf["history"].append(trade)
+    _save_portfolio(pf)
+
+    is_win = pnl > 0
+    icon = "🟢" if is_win else "🔴"
+    return {
+        "status": "ok",
+        "message": f"{icon} 已平仓：{target['symbol']} {shares}股 出入 ${exit_price:.2f} → ${exit_val:,.0f}，盈亏 ${pnl:+,.0f}（{pnl_pct:+.1f}%）",
+        "trade": trade,
+    }
+
+
+@app.get("/portfolio/journal")
+def portfolio_journal():
+    """交易日志 — 所有已平仓交易的复盘 + 绩效统计"""
+    pf = _load_portfolio()
+    history = pf.get("history", [])
+
+    if not history:
+        return {"formatted_report": "📭 暂无交易记录。", "trades": [], "stats": {}}
+
+    # 绩效统计
+    total_trades = len(history)
+    wins = [t for t in history if t["pnl"] > 0]
+    losses = [t for t in history if t["pnl"] <= 0]
+    win_count = len(wins)
+    loss_count = len(losses)
+    win_rate = win_count / total_trades * 100 if total_trades > 0 else 0
+
+    total_pnl = sum(t["pnl"] for t in history)
+    avg_win = sum(t["pnl"] for t in wins) / win_count if win_count > 0 else 0
+    avg_loss = sum(t["pnl"] for t in losses) / loss_count if loss_count > 0 else 0
+    profit_factor = abs(sum(t["pnl"] for t in wins) / sum(t["pnl"] for t in losses)) if sum(t["pnl"] for t in losses) != 0 else float("inf")
+
+    # 最大回撤近似：按时间顺序累计盈亏找最大回撤
+    cum_pnl = 0
+    peak = 0
+    max_drawdown = 0
+    for t in sorted(history, key=lambda x: x.get("exit_date", "")):
+        cum_pnl += t["pnl"]
+        peak = max(peak, cum_pnl)
+        drawdown = peak - cum_pnl
+        max_drawdown = max(max_drawdown, drawdown)
+
+    # 最大单笔盈亏
+    best_trade = max(history, key=lambda t: t["pnl"])
+    worst_trade = min(history, key=lambda t: t["pnl"])
+
+    # 按评级统计
+    rating_stats = {}
+    for t in history:
+        r = t.get("rating", "C")
+        if r not in rating_stats:
+            rating_stats[r] = {"count": 0, "wins": 0, "pnl": 0, "avg_pnl_pct": 0}
+        rating_stats[r]["count"] += 1
+        if t["pnl"] > 0:
+            rating_stats[r]["wins"] += 1
+        rating_stats[r]["pnl"] += t["pnl"]
+    for r in rating_stats:
+        s = rating_stats[r]
+        s["win_rate"] = round(s["wins"] / s["count"] * 100, 1) if s["count"] > 0 else 0
+        s["avg_pnl"] = round(s["pnl"] / s["count"], 2) if s["count"] > 0 else 0
+
+    stats = {
+        "total_trades": total_trades,
+        "win_count": win_count,
+        "loss_count": loss_count,
+        "win_rate": round(win_rate, 1),
+        "total_pnl": round(total_pnl, 2),
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(avg_loss, 2),
+        "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else "∞",
+        "max_drawdown": round(max_drawdown, 2),
+        "best_trade": {"symbol": best_trade["symbol"], "pnl": round(best_trade["pnl"], 2), "pnl_pct": round(best_trade["pnl_pct"], 2)},
+        "worst_trade": {"symbol": worst_trade["symbol"], "pnl": round(worst_trade["pnl"], 2), "pnl_pct": round(worst_trade["pnl_pct"], 2)},
+        "rating_stats": {r: {k: v for k, v in s.items() if k != "pnl"} for r, s in rating_stats.items()},
+    }
+
+    # 渲染报告
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = [
+        f"📋 交易日志复盘（{now_str}）",
+        "",
+        "━━━ 绩效总览 ━━━",
+        f"  总交易次数：{total_trades}",
+        f"  盈利/亏损：{win_count}赢 / {loss_count}亏",
+        f"  胜率：{win_rate:.1f}%",
+        f"  总盈亏：${total_pnl:+,.0f}",
+        f"  平均盈利：${avg_win:+,.0f}  |  平均亏损：${avg_loss:+,.0f}",
+        f"  盈亏比（Profit Factor）：{profit_factor:.2f}" if isinstance(profit_factor, float) else f"  盈亏比（Profit Factor）：∞",
+        f"  最大回撤：${max_drawdown:,.0f}",
+        f"  最佳单笔：{best_trade['symbol']} ${best_trade['pnl']:+,.0f}（{best_trade['pnl_pct']:+.1f}%）",
+        f"  最差单笔：{worst_trade['symbol']} ${worst_trade['pnl']:+,.0f}（{worst_trade['pnl_pct']:+.1f}%）",
+        "",
+        "━━━ 按信号评级统计 ━━━",
+    ]
+
+    for r in ["A", "B", "C", "D"]:
+        if r in rating_stats:
+            s = rating_stats[r]
+            lines.append(f"  {r}级：{s['count']}笔，胜率{s['win_rate']:.0f}%，平均${s['avg_pnl']:+,.0f}")
+
+    lines.append("")
+    lines.append("━━━ 逐笔明细 ━━━")
+    lines.append(f"  {'日期':<12} {'标的':<8} {'出入价':>22}  {'盈/亏':>16} {'评级':>5}  原因")
+    lines.append("  " + "─" * 85)
+
+    for t in sorted(history, key=lambda x: x.get("exit_date", ""), reverse=True):
+        date = t.get("exit_date", "")[:10]
+        price_range = f"${t['entry_price']:,.2f} → ${t['exit_price']:,.2f}"
+        pnl_s = f"${t['pnl']:+,.0f}（{t['pnl_pct']:+.1f}%）"
+        icon = "🟢" if t["pnl"] > 0 else "🔴"
+        lines.append(f"  {date:<12} {icon}{t['symbol']:<7} {price_range:>22}  {pnl_s:>16}  {t.get('rating','C'):<4}  {t.get('reason','')}")
+
+    report = "\n".join(lines)
+    return {
+        "formatted_report": report,
+        "trades": sorted(history, key=lambda x: x.get("exit_date", ""), reverse=True),
+        "stats": stats,
+    }
+
+
+@app.delete("/portfolio/position/{position_id}")
+def portfolio_delete(position_id: str):
+    """删除持仓（不移入交易日志）"""
+    pf = _load_portfolio()
+    positions = pf.get("positions", [])
+    target = None
+    remaining = []
+    for pos in positions:
+        if pos["id"] == position_id:
+            target = pos
+        else:
+            remaining.append(pos)
+
+    if not target:
+        return {"status": "error", "message": f"未找到持仓 {position_id}"}
+
+    pf["positions"] = remaining
+    _save_portfolio(pf)
+    return {"status": "ok", "message": f"已删除持仓：{target['symbol']} {target['shares']}股"}
+
+
+# ===== V5.33.0 持仓跟踪 & 交易日志 END =====
 
 
 @app.get("/stock/backtest")

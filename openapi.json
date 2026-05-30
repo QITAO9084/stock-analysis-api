@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.32.2（仓位不足1股警告+SELL隐藏仓位表）",
-    "version": "5.32.2"
+    "description": "股票/加密货币分析API - V5.33.0（持仓跟踪+交易日志+绩效统计）",
+    "version": "5.33.0"
   },
   "servers": [
     {
@@ -336,6 +336,74 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/portfolio/open": {
+      "post": {
+        "summary": "Open Position",
+        "description": "开仓记录 - 持久化到 portfolio.json。\\n\\n- **symbol**: 股票代码\\n- **entry_price**: 入场价\\n- **shares**: 股数\\n- **stop_loss**: 止损价（可选）\\n- **take_profit**: 止盈价（可选）\\n- **signal**: 入场信号\\n- **rating**: 入场评级（A/B/C/D）\\n- **score**: 评分\\n- **note**: 备注",
+        "operationId": "portfolio_open_portfolio_open_post",
+        "parameters": [
+          {"name": "symbol", "in": "query", "required": false, "schema": {"type": "string", "default": "AAPL"}},
+          {"name": "entry_price", "in": "query", "required": false, "schema": {"type": "number", "default": 0}},
+          {"name": "shares", "in": "query", "required": false, "schema": {"type": "integer", "default": 0}},
+          {"name": "stop_loss", "in": "query", "required": false, "schema": {"type": "number", "default": 0}},
+          {"name": "take_profit", "in": "query", "required": false, "schema": {"type": "number", "default": 0}},
+          {"name": "signal", "in": "query", "required": false, "schema": {"type": "string", "default": "NEUTRAL"}},
+          {"name": "rating", "in": "query", "required": false, "schema": {"type": "string", "default": "C"}},
+          {"name": "score", "in": "query", "required": false, "schema": {"type": "integer", "default": 0}},
+          {"name": "note", "in": "query", "required": false, "schema": {"type": "string", "default": ""}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {"application/json": {"schema": {"type": "object"}}}
+          }
+        }
+      }
+    },
+    "/portfolio/status": {
+      "get": {
+        "summary": "Portfolio Status",
+        "description": "持仓状态 - 实时拉取价格计算浮盈/浮亏，检查止损止盈",
+        "operationId": "portfolio_status_portfolio_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {"application/json": {"schema": {"type": "object", "properties": {"formatted_report": {"type": "string"}}}}}
+          }
+        }
+      }
+    },
+    "/portfolio/close": {
+      "post": {
+        "summary": "Close Position",
+        "description": "平仓记录 - 从持仓移除并写入交易日志\\n\\n- **position_id**: 持仓ID\\n- **exit_price**: 出场价格\\n- **reason**: 平仓原因",
+        "operationId": "portfolio_close_portfolio_close_post",
+        "parameters": [
+          {"name": "position_id", "in": "query", "required": false, "schema": {"type": "string", "default": ""}},
+          {"name": "exit_price", "in": "query", "required": false, "schema": {"type": "number", "default": 0}},
+          {"name": "reason", "in": "query", "required": false, "schema": {"type": "string", "default": "手动平仓"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {"application/json": {"schema": {"type": "object"}}}
+          }
+        }
+      }
+    },
+    "/portfolio/journal": {
+      "get": {
+        "summary": "Trade Journal",
+        "description": "交易日志复盘 - 所有已平仓交易 + 绩效统计（胜率/盈亏比/最大回撤/按评级统计）",
+        "operationId": "portfolio_journal_portfolio_journal_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {"application/json": {"schema": {"type": "object", "properties": {"formatted_report": {"type": "string"}}}}}
           }
         }
       }
