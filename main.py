@@ -8,14 +8,14 @@ import json
 import sys
 import os as _os
 
-# V5.30.0: 修复trade_point与signal方向矛盾+止损止盈方向反转（^GSPC buy信号卖方向止损）
+# V5.32.1: 修复SELL信号仓位+B级Kelly=0保底仓位
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.32.0"
+    version="5.32.1"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1093,11 +1093,12 @@ def calculate_signal_rating(fields: dict) -> dict:
 
 
 def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: float = 6400) -> dict:
-    """V5.32: 凯利公式仓位建议
+    """V5.32.1: 凯利公式仓位建议
 
     f* = (p*b - q) / b  ->  Half-Kelly ->  rating_cap ->  risk_cap
 
     - total_capital: 总资金（默认 $6,400 ~ 5万HKD）
+    - V5.32.1 修复：SELL信号禁止买入建仓；BUY+B级以上Kelly=0时保底仓位
     """
     rating = rating_data["rating"]
     rr_a = rating_data.get("rr_a", 0)
@@ -1106,6 +1107,25 @@ def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: fl
     current_price = fields.get("current_price", 0) or 0
     currency = str(fields.get("currency", "USD"))
     signal = str(fields.get("signal", "NEUTRAL"))
+
+    # V5.32.1 修复1: SELL/STRONG_SELL 信号不建买入仓位
+    is_sell = signal in ("SELL", "STRONG_SELL")
+    if is_sell:
+        return {
+            "suggested_pct": 0,
+            "position_amount": 0,
+            "shares": 0,
+            "max_loss": 0,
+            "max_loss_pct": 0,
+            "kelly_raw": 0,
+            "half_kelly": 0,
+            "rating_cap": 0,
+            "risk_cap": "inf",
+            "total_capital": total_capital,
+            "currency": currency,
+            "reason": "卖出信号，不建议买入建仓",
+            "floor_applied": False,
+        }
 
     # 胜率估计（基于评级）
     win_probs = {"A": 0.60, "B": 0.50, "C": 0.40, "D": 0.30}
@@ -1143,6 +1163,14 @@ def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: fl
     if rating == "D":
         suggested_pct = 0
 
+    # V5.32.1 修复2: BUY信号+B级以上评级，Kelly=0时保底最低仓位（避免"B级信号但0仓位"矛盾）
+    MIN_FLOOR = {"A": 0.05, "B": 0.03, "C": 0, "D": 0}
+    floor_pct = MIN_FLOOR.get(rating, 0)
+    floor_applied = False
+    if suggested_pct == 0 and floor_pct > 0:
+        suggested_pct = floor_pct
+        floor_applied = True
+
     # 转为实际股数
     if suggested_pct > 0 and current_price > 0:
         position_amount = total_capital * suggested_pct
@@ -1169,6 +1197,8 @@ def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: fl
         "risk_cap": round(position_by_risk_pct * 100, 1) if position_by_risk_pct < 999 else "inf",
         "total_capital": total_capital,
         "currency": currency,
+        "reason": "",
+        "floor_applied": floor_applied,
     }
 
 
@@ -1352,11 +1382,20 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
     warning_text = "\n".join(warning_lines) if warning_lines else ""
 
     # 仓位建议文本
+    reason = position_data.get("reason", "")
+    floor_applied = position_data.get("floor_applied", False)
+
     if position_data["suggested_pct"] > 0:
+        floor_note = ""
+        if floor_applied:
+            floor_note = f"\n⚠️  盈亏比偏低（1:{rating_data['rr_a']:.1f}），Kelly公式建议0%，但评级{rating_data['rating']}级信号合格，启用保底仓位"
         pos_text = f"""建议仓位：{position_data['suggested_pct']}%（~{position_data['currency']}{position_data['position_amount']:,.0f}，约 {position_data['shares']} 股）
 单笔最大亏损：{position_data['currency']}{position_data['max_loss']:,.0f}（{position_data['max_loss_pct']}%总资金）
 总资金基准：{position_data['currency']}{position_data['total_capital']:,.0f}
-算法：Half-Kelly ({position_data['half_kelly']}%) x 评级上限({position_data['rating_cap']}%) x 风险约束(<=2%)"""
+算法：Half-Kelly ({position_data['half_kelly']}%) x 评级上限({position_data['rating_cap']}%) x 风险约束(<=2%){floor_note}"""
+    elif reason:
+        pos_text = f"""建议仓位：0%（不建议入场）
+原因：{reason}"""
     else:
         pos_text = f"""建议仓位：0%（不建议入场）
 原因：评级 {rating_data['rating']} 级（{rating_data['rating_desc']}）"""

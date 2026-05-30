@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.32.0（信号评级A/B/C/D + 凯利仓位建议）",
-    "version": "5.32.0"
+    "description": "股票/加密货币分析API - V5.32.1（修复SELL仓位+BUY保底仓位）",
+    "version": "5.32.1"
   },
   "servers": [
     {
