@@ -8,14 +8,14 @@ import json
 import sys
 import os as _os
 
-# V5.28.3: compare报告末尾嵌入holdings诊断标记 + 版本升级
+# V5.28.4: compare端点用Request裸读holdings + 报告末尾嵌URL参数诊断 + 修复Agent死循环
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.28.3"
+    version="5.28.4"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1679,18 +1679,11 @@ def build_compare_report(results: list, summary: dict, holdings: list = None, mk
         lines.append("⚠️ 逆大盘方向提醒：")
         lines.extend(counter_alerts)
 
-    # 内嵌诊断：报告末尾显示 holdings 接收状态
-    lines.append("")
-    if holdings:
-        lines.append(f"🔍 [诊断] holdings已接收：{len(holdings)}条持仓记录")
-    else:
-        lines.append("🔍 [诊断] holdings未接收：API未收到持仓参数")
-
     return "\n".join(lines)
 
 
 @app.get("/stock/compare")
-def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us", holdings: str = ""):
+def compare_stocks(request: Request, symbols: str = "AAPL,MSFT,GOOG", market: str = "us", holdings: str = ""):
     """
     多股对比分析接口（专为 Coze 插件优化，管道转发）
 
@@ -1704,17 +1697,28 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us", holdings
     if market == "auto" or not market:
         market = "us"
 
-    # DEBUG: 确认 holdings 参数是否被 Coze Agent 传递
-    print(f"[COMPARE DEBUG] raw holdings param: '{holdings}' (type: {type(holdings).__name__}, len: {len(holdings) if holdings else 0})")
+    # === V5.28.4: 暴力诊断 — 从裸 Request 读 holdings，绕过 FastAPI 参数绑定 ===
+    all_params = dict(request.query_params)
+    raw_holdings = request.query_params.get("holdings", "")
+    full_url = str(request.url)
+
+    # 服务器日志
+    print(f"[COMPARE V5.28.4] Full URL: {full_url}", flush=True)
+    print(f"[COMPARE V5.28.4] All query params: {all_params}", flush=True)
+    print(f"[COMPARE V5.28.4] holdings from Request: '{raw_holdings[:200]}' (len={len(raw_holdings)})", flush=True)
+    print(f"[COMPARE V5.28.4] holdings from FastAPI binding: '{holdings[:200]}' (len={len(holdings)})", flush=True)
+
+    # 合并 holdings 来源：裸读优先
+    effective = raw_holdings or holdings
 
     # 解析持仓
     holdings_list = None
-    if holdings:
+    if effective and effective.strip():
         try:
-            holdings_list = json.loads(holdings)
-            print(f"[COMPARE DEBUG] parsed {len(holdings_list)} holding(s)")
+            holdings_list = json.loads(effective)
+            print(f"[COMPARE V5.28.4] parsed {len(holdings_list)} holding(s)")
         except (json.JSONDecodeError, TypeError) as e:
-            print(f"[COMPARE DEBUG] holdings parse failed: {e}")
+            print(f"[COMPARE V5.28.4] holdings parse failed: {e}")
             holdings_list = None
 
     # 大盘环境
@@ -1826,6 +1830,19 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us", holdings
 
         analysis_time = datetime.now().isoformat()
         formatted_report = build_compare_report(results, summary, holdings_list, mkt_trend, analysis_time)
+
+        # V5.28.4: 在报告末尾追加裸 query params 诊断（所见即所得）
+        param_keys = list(all_params.keys())
+        holdings_in_url = "holdings" in all_params
+        formatted_report += (
+            f"\n\n━━━━━━━━━━━━━━━━━━\n"
+            f"🔍 [V5.28.4 诊断] URL参数列表\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"- 收到参数: {param_keys}\n"
+            f"- holdings在URL中: {'✅ 是' if holdings_in_url else '❌ 否'}\n"
+            f"- holdings原始值长度: {len(raw_holdings)}\n"
+            f"- holdings解析结果: {len(holdings_list) if holdings_list else 0}条持仓"
+        )
 
         return {
             "market": market,
