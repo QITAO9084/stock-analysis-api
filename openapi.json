@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.28.4（ADX分级+mild趋势+RSI动能诊断+MA50止损+Request裸读holdings）",
-    "version": "5.28.4"
+    "description": "股票/加密货币分析API - V5.29.0（symbols内嵌holdings绕过方案）",
+    "version": "5.29.0"
   },
   "servers": [
     {

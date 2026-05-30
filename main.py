@@ -8,14 +8,14 @@ import json
 import sys
 import os as _os
 
-# V5.28.4: compare端点用Request裸读holdings + 报告末尾嵌URL参数诊断 + 修复Agent死循环
+# V5.29.0: symbols内嵌holdings绕过方案（TSLA|10|420,GOOG|5|400格式） + 清理V5.28.x调试代码
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.28.4"
+    version="5.29.0"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1739,8 +1739,39 @@ def compare_stocks(request: Request, symbols: str = "AAPL,MSFT,GOOG", market: st
         elif mkt_trend["change"] < -3:
             mkt_factor = 0.85
 
+    # === V5.29.0: 从 symbols 中提取 holdings（绕过 Coze 参数映射问题） ===
+    # Coze 插件无法正确传递 holdings 参数到 HTTP Query String
+    # 绕过方案：把持仓信息编码进 symbols 参数
+    # 格式: TSLA|10|420,GOOG|5|400  (symbol|shares|cost)
+    holdings_from_symbols = []
+    clean_parts = []
+    for part in symbols.split(","):
+        part = part.strip()
+        if "|" in part and not holdings_list:
+            fields = part.split("|")
+            sym_name = fields[0].strip()
+            clean_parts.append(sym_name)
+            try:
+                shares = int(fields[1].strip()) if len(fields) >= 2 else 0
+                cost = float(fields[2].strip()) if len(fields) >= 3 else 0
+                if shares > 0 and cost > 0:
+                    holdings_from_symbols.append({
+                        "symbol": sym_name.upper(), "shares": shares, "cost": cost
+                    })
+            except (ValueError, IndexError):
+                pass
+        else:
+            clean_parts.append(part)
+
+    if holdings_from_symbols:
+        holdings_list = holdings_from_symbols
+        print(f"[COMPARE V5.29.0] extracted {len(holdings_list)} holdings from symbols encoding", flush=True)
+
+    # 用清洗后的 symbols 做分析
+    symbols_clean = ",".join(clean_parts)
+
     try:
-        symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        symbol_list = [s.strip().upper() for s in symbols_clean.split(",") if s.strip()]
         if len(symbol_list) > 5:
             symbol_list = symbol_list[:5]
         if len(symbol_list) < 2:
@@ -1831,17 +1862,14 @@ def compare_stocks(request: Request, symbols: str = "AAPL,MSFT,GOOG", market: st
         analysis_time = datetime.now().isoformat()
         formatted_report = build_compare_report(results, summary, holdings_list, mkt_trend, analysis_time)
 
-        # V5.28.4: 在报告末尾追加裸 query params 诊断（所见即所得）
-        param_keys = list(all_params.keys())
-        holdings_in_url = "holdings" in all_params
+        # V5.29.0: 报告中嵌入 holdings 来源诊断
+        source = "symbols编码" if holdings_from_symbols else ("URL参数" if holdings_list else "无")
         formatted_report += (
             f"\n\n━━━━━━━━━━━━━━━━━━\n"
-            f"🔍 [V5.28.4 诊断] URL参数列表\n"
+            f"🔍 [V5.29.0 诊断] 持仓数据来源\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"- 收到参数: {param_keys}\n"
-            f"- holdings在URL中: {'✅ 是' if holdings_in_url else '❌ 否'}\n"
-            f"- holdings原始值长度: {len(raw_holdings)}\n"
-            f"- holdings解析结果: {len(holdings_list) if holdings_list else 0}条持仓"
+            f"- 来源: {source}\n"
+            f"- 持仓条数: {len(holdings_list) if holdings_list else 0}\n"
         )
 
         return {
