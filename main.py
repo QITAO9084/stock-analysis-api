@@ -15,7 +15,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.25.4"
+    version="5.25.5"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -763,9 +763,6 @@ def build_formatted_report(fields: dict) -> str:
       若必须操作：严格止损，快进快出"""
     elif entry_a == 0:
         plans_text = "      ⚠️ 估算值，仅供参考（入场价格数据不足，三套方案暂不提供具体数值）"
-    elif rr_a < 1.5:
-        plans_text = f"""      ⚠️ 盈亏比不佳（1:{rr_a:.1f}），风险远大于收益，不适合实盘操作
-      建议：等待更好的入场点，或寻找其他标的"""
     else:
         dist_a_pct = dist_a / entry_a * 100
         tp_a_pct = abs(take_profit_a - entry_a) / entry_a * 100
@@ -776,7 +773,9 @@ def build_formatted_report(fields: dict) -> str:
         tp_b_pct = tp_b / entry_b * 100 if entry_b else 0
         rr_b = tp_b / dist_b if dist_b > 0 else 0
 
-        plans_text = f"""【方案A】收紧止损（激进，盈亏比 1:{rr_a:.1f}）
+        # 盈亏比警告标签（不拦截，仅提示）
+        rr_warning = f"      ⚠️ 盈亏比偏低（1:{rr_a:.1f}），风险收益不匹配，请谨慎建仓\n" if rr_a < 1.0 else ""
+        plans_text = rr_warning + f"""【方案A】收紧止损（激进，盈亏比 1:{rr_a:.1f}）
   入场价：{entry_a:.2f} {currency}
   止损位：{stop_loss_a:.2f} {currency}（距入场 {dist_a_pct:.1f}%）
   止盈位：{take_profit_a:.2f} {currency}（距入场 {tp_a_pct:.1f}%）
@@ -798,7 +797,7 @@ def build_formatted_report(fields: dict) -> str:
 
     # 仓位计算引擎
     position_text = ""
-    if adx >= 25 and rr_a >= 1.5 and entry_a > 0:
+    if adx >= 25 and rr_a >= 1.0 and entry_a > 0:
         atr = fields.get("atr", 0) or 0
         if atr > 0 and dist_a > 0:
             accounts = [5000, 10000, 25000, 50000, 100000]
@@ -2000,30 +1999,26 @@ def run_backtest(data, symbol: str, days: int = 60) -> dict:
         tp_a_pct = tp_a / entry_a * 100
         rr_a = tp_a / dist_a if dist_a > 0 else 0
 
-        # 盈亏比过滤：< 1:1.5 不输出具体方案（风险远大于收益，不适合实盘）
-        if rr_a < 1.5:
-            plans_text = f"""      ⚠️ 盈亏比不佳（1:{rr_a:.1f}），风险远大于收益，不适合实盘操作
-          止损距离 {dist_a_pct:.1f}% vs 止盈距离 {tp_a_pct:.1f}%
-          建议：等待更好的入场点，或等待波动率收敛后重新评估"""
+        # 方案B
+        dist_b = abs(entry_b - stop_loss_b)
+        tp_b = abs(take_profit_b - entry_b)
+        dist_b_pct = dist_b / entry_b * 100 if entry_b else 0
+        tp_b_pct = tp_b / entry_b * 100 if entry_b else 0
+        rr_b = tp_b / dist_b if dist_b > 0 else 0
+
+        # 方案A适用场景
+        if signal in ("BUY", "STRONG_BUY"):
+            scenario_a = "ADX≥25 强趋势，顺势操作（买入方向）"
+        elif signal in ("SELL", "STRONG_SELL"):
+            scenario_a = "ADX≥25 强趋势，顺势操作（卖出方向）"
+        elif signal in ("NEUTRAL", "HOLD"):
+            scenario_a = "ADX≥25 趋势明确，但买卖信号打架，建议观望等待方向明确"
         else:
-            # 方案B
-            dist_b = abs(entry_b - stop_loss_b)
-            tp_b = abs(take_profit_b - entry_b)
-            dist_b_pct = dist_b / entry_b * 100 if entry_b else 0
-            tp_b_pct = tp_b / entry_b * 100 if entry_b else 0
-            rr_b = tp_b / dist_b if dist_b > 0 else 0
+            scenario_a = f"ADX≥25 强趋势，顺势操作（{signal}方向）"
 
-            # 方案A适用场景：根据信号类型动态生成
-            if signal in ("BUY", "STRONG_BUY"):
-                scenario_a = "ADX≥25 强趋势，顺势操作（买入方向）"
-            elif signal in ("SELL", "STRONG_SELL"):
-                scenario_a = "ADX≥25 强趋势，顺势操作（卖出方向）"
-            elif signal in ("NEUTRAL", "HOLD"):
-                scenario_a = "ADX≥25 趋势明确，但买卖信号打架，建议观望等待方向明确"
-            else:
-                scenario_a = f"ADX≥25 强趋势，顺势操作（{signal}方向）"
-
-            plans_text = f"""【方案A】收紧止损（激进，盈亏比 1:{rr_a:.1f}）
+        # 盈亏比警告（不拦截，仅提示）
+        rr_warning = f"      ⚠️ 盈亏比偏低（1:{rr_a:.1f}），风险收益不匹配，请谨慎建仓\n" if rr_a < 1.0 else ""
+        plans_text = rr_warning + f"""【方案A】收紧止损（激进，盈亏比 1:{rr_a:.1f}）
   入场价：{entry_a:.2f} {currency}
   止损位：{stop_loss_a:.2f} {currency}（距入场 {dist_a_pct:.1f}%）
   止盈位：{take_profit_a:.2f} {currency}（距入场 {tp_a_pct:.1f}%，盈亏比 1:{rr_a:.1f}）
@@ -2107,7 +2102,7 @@ KDJ：K={fields.get('kdj_k', 0):.1f} D={fields.get('kdj_d', 0):.1f} J={fields.ge
 
     # V5.25: 仓位计算引擎
     atr_val = fields.get("atr", 0) or 0
-    if entry_a > 0 and dist_a > 0 and rr_a >= 1.5:
+    if entry_a > 0 and dist_a > 0 and rr_a >= 1.0:
         # 以 $10,000 账户为示例，默认单笔风险 2%
         example_accounts = [5000, 10000, 25000, 50000, 100000]
         risk_pct = 0.02  # 2% 单笔风险
