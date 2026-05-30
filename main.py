@@ -15,7 +15,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.31.1"
+    version="5.31.2"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -2359,7 +2359,7 @@ def detect_trade_points(data, symbol):
             stop_loss_a = round(ma50 * 0.99, 2)       # MA50 下方1%
         else:
             stop_loss_a = round(recent_low * 0.97, 2)
-        take_profit_a = round(current_price + atr * 1.5, 2)
+        take_profit_a = round(current_price + atr * 3.0, 2)
         # 方案B：上调止盈（保守，用远期阻力）
         entry_b = round(current_price * 0.995, 2)
         if ma20 and ma20_deviation > 15:
@@ -2388,7 +2388,7 @@ def detect_trade_points(data, symbol):
             stop_loss_c = round(near_support_c * 0.96, 2)
         else:
             stop_loss_c = round(recent_low * 0.96, 2)
-        take_profit_c1 = round(current_price + atr * 1.5, 2)
+        take_profit_c1 = round(current_price + atr * 3.0, 2)
         take_profit_c2 = round(recent_high + atr * 1.0, 2)
     elif trade_point in ("strong_sell", "sell"):
         # === SELL: 单套方案（旧版兼容，修复非零） ===
