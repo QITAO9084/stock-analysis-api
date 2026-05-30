@@ -704,9 +704,9 @@ def build_operation_summary(fields: dict, holdings: list = None) -> str:
         if adx < 25:
             suggestion = "ADX 震荡市，建议观望，不急于动手"
         elif signal in ("BUY", "STRONG_BUY"):
-            suggestion = f"多头信号，{trade_point_cn}，可考虑建仓（见下方方案）"
+            suggestion = "多头信号，建议买入，可考虑建仓（见下方方案）"
         elif signal in ("SELL", "STRONG_SELL"):
-            suggestion = f"空头信号，{trade_point_cn}，不建议做多"
+            suggestion = "空头信号，建议卖出或不参与，不建议做多"
         else:
             suggestion = "信号中性，建议等待更明确方向"
 
