@@ -15,7 +15,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.25.5"
+    version="5.25.6"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -773,15 +773,14 @@ def build_formatted_report(fields: dict) -> str:
         tp_b_pct = tp_b / entry_b * 100 if entry_b else 0
         rr_b = tp_b / dist_b if dist_b > 0 else 0
 
-        # 盈亏比警告标签（不拦截，仅提示）
-        rr_warning = f"      ⚠️ 盈亏比偏低（1:{rr_a:.1f}），风险收益不匹配，请谨慎建仓\n" if rr_a < 1.0 else ""
-        plans_text = rr_warning + f"""【方案A】收紧止损（激进，盈亏比 1:{rr_a:.1f}）
+        rr_b_warning = f"      ⚠️ 方案B盈亏比偏低（1:{rr_b:.1f}），风险收益不匹配，请谨慎建仓\n" if rr_b < 1.0 else ""
+        plans_text = rr_a_warning + f"""【方案A】收紧止损（激进，盈亏比 1:{rr_a:.1f}）
   入场价：{entry_a:.2f} {currency}
   止损位：{stop_loss_a:.2f} {currency}（距入场 {dist_a_pct:.1f}%）
-  止盈位：{take_profit_a:.2f} {currency}（距入场 {tp_a_pct:.1f}%）
+  止盈位：{take_profit_a:.2f} {currency}（距入场 {tp_a_pct:.1f}%，盈亏比 1:{rr_a:.1f}）
   💡 适用场景：{scenario_a}
 
-【方案B】上调止盈（保守，用远期强阻力）
+【方案B】上调止盈（保守，用远期强阻力）{rr_b_warning}
   入场价：{entry_b:.2f} {currency}
   止损位：{stop_loss_b:.2f} {currency}（距入场 {dist_b_pct:.1f}%，较方案A放宽）
   止盈位：{take_profit_b:.2f} {currency}（距入场 {tp_b_pct:.1f}%，盈亏比 1:{rr_b:.1f}）
@@ -2017,14 +2016,15 @@ def run_backtest(data, symbol: str, days: int = 60) -> dict:
             scenario_a = f"ADX≥25 强趋势，顺势操作（{signal}方向）"
 
         # 盈亏比警告（不拦截，仅提示）
-        rr_warning = f"      ⚠️ 盈亏比偏低（1:{rr_a:.1f}），风险收益不匹配，请谨慎建仓\n" if rr_a < 1.0 else ""
-        plans_text = rr_warning + f"""【方案A】收紧止损（激进，盈亏比 1:{rr_a:.1f}）
+        rr_a_warning = f"      ⚠️ 盈亏比偏低（1:{rr_a:.1f}），风险收益不匹配，请谨慎建仓\n" if rr_a < 1.0 else ""
+        rr_b_warning = f"      ⚠️ 方案B盈亏比偏低（1:{rr_b:.1f}），风险收益不匹配，请谨慎建仓\n" if rr_b < 1.0 else ""
+        plans_text = rr_a_warning + f"""【方案A】收紧止损（激进，盈亏比 1:{rr_a:.1f}）
   入场价：{entry_a:.2f} {currency}
   止损位：{stop_loss_a:.2f} {currency}（距入场 {dist_a_pct:.1f}%）
   止盈位：{take_profit_a:.2f} {currency}（距入场 {tp_a_pct:.1f}%，盈亏比 1:{rr_a:.1f}）
   💡 适用场景：{scenario_a}
 
-【方案B】上调止盈（保守，用远期强阻力）
+【方案B】上调止盈（保守，用远期强阻力）{rr_b_warning}
   入场价：{entry_b:.2f} {currency}
   止损位：{stop_loss_b:.2f} {currency}（距入场 {dist_b_pct:.1f}%，较方案A放宽）
   止盈位：{take_profit_b:.2f} {currency}（距入场 {tp_b_pct:.1f}%，盈亏比 1:{rr_b:.1f}）
