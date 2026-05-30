@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.27.0（持仓面板 + compare管道统一 + 逆大盘方向警告）",
-    "version": "5.27.0"
+    "description": "股票/加密货币分析API - V5.28.0（ADX分级+mild趋势+RSI动能诊断+MA50止损）",
+    "version": "5.28.0"
   },
   "servers": [
     {

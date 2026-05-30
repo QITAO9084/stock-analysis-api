@@ -8,14 +8,14 @@ import json
 import sys
 import os as _os
 
-# V5.27.0: 持仓面板 /stock/portfolio + 逆大盘方向警告（操盘摘要检测个股信号 vs 市场背离）
+# V5.28.0: ADX趋势分级（mild_bull/bear） + RSI动能诊断 + 方案A/B止损改MA50支撑
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.27.0"
+    version="5.28.0"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -263,9 +263,11 @@ def calculate_adx(data, period=14):
     plus_val = round(float(plus_di.iloc[-1]), 2)
     minus_val = round(float(minus_di.iloc[-1]), 2)
 
-    if adx_val > 25:
+    if adx_val >= 30:
         trend = "strong_bull" if plus_val > minus_val else "strong_bear"
-    elif adx_val > 20:
+    elif adx_val >= 25:
+        trend = "mild_bull" if plus_val > minus_val else "mild_bear"
+    elif adx_val >= 20:
         trend = "weak_bull" if plus_val > minus_val else "weak_bear"
     else:
         trend = "ranging"
@@ -1057,8 +1059,13 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
                 f"收{round(row['Close'],2)} 量{int(row['Volume'])}"
             )
 
-        # 信号列表拼成一个字符串
-        signals_text = "；".join(signal_data["signals"]) if signal_data["signals"] else "无明显信号"
+        # 信号列表拼成一个字符串（追加 RSI 动能变化）
+        rsi_delta_val = round(indicators["rsi_delta"], 2)
+        signals_list = list(signal_data["signals"]) if signal_data["signals"] else []
+        if abs(rsi_delta_val) > 5:
+            direction = "回落" if rsi_delta_val < 0 else "上升"
+            signals_list.append(f"RSI短期{direction}{abs(rsi_delta_val):.1f}点，动能{'减弱' if rsi_delta_val < 0 else '增强'}")
+        signals_text = "；".join(signals_list) if signals_list else "无明显信号"
 
         # 买卖点文字
         trade_point_cn = {
@@ -2225,14 +2232,20 @@ def detect_trade_points(data, symbol):
         entry_price = round(current_price * 0.995, 2)   # 稍低于当前价
         stop_loss = round(recent_low * 0.98, 2)          # 近期低点下方2%
         take_profit = round(current_price + atr * 3, 2)  # 3倍ATR
-        # === 三套方案（V5.23 新增） ===
-        # 方案A：收紧止损（激进）
+        # === 三套方案（V5.28 止损MA50优化） ===
+        # 方案A：收紧止损（激进，MA50支撑比近期低点更可靠）
         entry_a = round(current_price * 0.998, 2)
-        stop_loss_a = round(recent_low * 0.97, 2)
+        if ma50 and ma50 > recent_low:
+            stop_loss_a = round(ma50 * 0.99, 2)       # MA50 下方1%（MA50是技术支撑位）
+        else:
+            stop_loss_a = round(recent_low * 0.97, 2)  # 无MA50时退回到近期低点
         take_profit_a = round(current_price + atr * 1.5, 2)
         # 方案B：上调止盈（保守，用远期阻力）
         entry_b = round(current_price * 0.995, 2)
-        stop_loss_b = round(recent_low * 0.95, 2)
+        if ma50 and ma50 > recent_low:
+            stop_loss_b = round(ma50 * 0.98, 2)       # MA50 下方2%（比方案A宽松）
+        else:
+            stop_loss_b = round(recent_low * 0.95, 2)
         take_profit_b = round(recent_high + atr * 1.0, 2)
         # 方案C：分层仓位
         entry_c1 = round(current_price * 0.998, 2)
