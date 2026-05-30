@@ -8,14 +8,14 @@ import json
 import sys
 import os as _os
 
-# V5.28.1: 修复 ADX覆盖段止损MA50生效 + 方案A文案修正（强趋势→趋势明确）
+# V5.28.3: compare报告末尾嵌入holdings诊断标记 + 版本升级
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.28.2"
+    version="5.28.3"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1678,6 +1678,13 @@ def build_compare_report(results: list, summary: dict, holdings: list = None, mk
         lines.append("")
         lines.append("⚠️ 逆大盘方向提醒：")
         lines.extend(counter_alerts)
+
+    # 内嵌诊断：报告末尾显示 holdings 接收状态
+    lines.append("")
+    if holdings:
+        lines.append(f"🔍 [诊断] holdings已接收：{len(holdings)}条持仓记录")
+    else:
+        lines.append("🔍 [诊断] holdings未接收：API未收到持仓参数")
 
     return "\n".join(lines)
 
