@@ -5,6 +5,12 @@
     "description": "股票/加密货币分析API - V5.28.4（ADX分级+mild趋势+RSI动能诊断+MA50止损+Request裸读holdings）",
     "version": "5.28.4"
   },
+  "servers": [
+    {
+      "url": "https://stock-analysis-api-n741.onrender.com",
+      "description": "Render"
+    }
+  ],
   "paths": {
     "/": {
       "get": {
