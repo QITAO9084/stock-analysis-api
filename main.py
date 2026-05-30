@@ -15,7 +15,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.30.0"
+    version="5.31.0"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1209,10 +1209,18 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
         if final_trade_point != trade_points["trade_point"]:
             sp = signal_data["support_level"]
             rs = signal_data["resistance_level"]
-            ma50_ref = indicators.get("ma50", 0) or 0  # V5.28: MA50用于止损修正
+            ma50_ref = indicators.get("ma50", 0) or 0
+            # V5.31: 偏离度检测 — 价格大幅偏离 MA20 时不用远端 MA50 做止损
+            ma20_ref = indicators.get("ma20", 0) or 0
+            ma20_dev = (current_price - ma20_ref) / ma20_ref * 100 if ma20_ref else 0
             if final_trade_point in ("buy", "strong_buy"):
-                # 止损优先用MA50支撑（技术支撑比简单支持位更可靠）
-                if ma50_ref and ma50_ref > sp:
+                # 偏离 > 20% → 近端支撑（MA10/近期低点）
+                if ma20_ref and ma20_dev > 20:
+                    near = min(indicators.get("ma10", sp) or sp, sp)
+                    result["stop_loss_a"] = round(near * 0.99, 2)
+                    result["stop_loss_b"] = round(near * 0.98, 2)
+                    result["stop_loss_c"] = round(near * 0.96, 2)
+                elif ma50_ref and ma50_ref > sp:
                     result["stop_loss_a"] = round(ma50_ref * 0.99, 2)
                     result["stop_loss_b"] = round(ma50_ref * 0.98, 2)
                     result["stop_loss_c"] = round(ma50_ref * 0.96, 2)
@@ -2307,27 +2315,48 @@ def detect_trade_points(data, symbol):
     if trade_point in ("strong_buy", "buy"):
         # === BUY: 单套方案（旧版兼容） ===
         entry_price = round(current_price * 0.995, 2)   # 稍低于当前价
-        stop_loss = round(recent_low * 0.98, 2)          # 近期低点下方2%
-        take_profit = round(current_price + atr * 3, 2)  # 3倍ATR
-        # === 三套方案（V5.28 止损MA50优化） ===
-        # 方案A：收紧止损（激进，MA50支撑比近期低点更可靠）
-        entry_a = round(current_price * 0.998, 2)
-        if ma50 and ma50 > recent_low:
-            stop_loss_a = round(ma50 * 0.99, 2)       # MA50 下方1%（MA50是技术支撑位）
+        # V5.31: 偏离度检测 — 价格大幅偏离均线时，止损不应用远端 MA50
+        # 判断偏离度：价格 vs MA20（MA20 比 MA50 更能反映近期趋势）
+        ma20_deviation = (current_price - ma20) / ma20 * 100 if ma20 else 0
+        # 偏离 > 20% → 用近端支撑（MA10 或近期低点）
+        if ma20 and ma20_deviation > 20:
+            # 近端止损：取 MA10 和近期低点的较小值
+            near_support = min(ma10, recent_low) if ma10 else recent_low
+            sl_base = near_support  # 不过度偏离当前价
+        elif ma50 and ma50 > recent_low:
+            sl_base = ma50
         else:
-            stop_loss_a = round(recent_low * 0.97, 2)  # 无MA50时退回到近期低点
+            sl_base = recent_low
+        stop_loss = round(sl_base * 0.98, 2)          # 支撑下方2%
+        take_profit = round(current_price + atr * 3, 2)  # 3倍ATR
+        # === 三套方案（V5.31 偏离度修正） ===
+        entry_a = round(current_price * 0.998, 2)
+        if ma20 and ma20_deviation > 20:
+            near_support_a = min(ma10, recent_low) if ma10 else recent_low
+            stop_loss_a = round(near_support_a * 0.99, 2)   # 近端支撑下方1%
+        elif ma50 and ma50 > recent_low:
+            stop_loss_a = round(ma50 * 0.99, 2)       # MA50 下方1%
+        else:
+            stop_loss_a = round(recent_low * 0.97, 2)
         take_profit_a = round(current_price + atr * 1.5, 2)
         # 方案B：上调止盈（保守，用远期阻力）
         entry_b = round(current_price * 0.995, 2)
-        if ma50 and ma50 > recent_low:
-            stop_loss_b = round(ma50 * 0.98, 2)       # MA50 下方2%（比方案A宽松）
+        if ma20 and ma20_deviation > 20:
+            near_support_b = min(ma10, recent_low) if ma10 else recent_low
+            stop_loss_b = round(near_support_b * 0.98, 2)   # 近端支撑下方2%
+        elif ma50 and ma50 > recent_low:
+            stop_loss_b = round(ma50 * 0.98, 2)       # MA50 下方2%
         else:
             stop_loss_b = round(recent_low * 0.95, 2)
         take_profit_b = round(recent_high + atr * 1.0, 2)
         # 方案C：分层仓位
         entry_c1 = round(current_price * 0.998, 2)
         entry_c2 = round(recent_low * 1.02, 2)
-        stop_loss_c = round(recent_low * 0.96, 2)
+        if ma20 and ma20_deviation > 20:
+            near_support_c = min(ma10, recent_low) if ma10 else recent_low
+            stop_loss_c = round(near_support_c * 0.96, 2)
+        else:
+            stop_loss_c = round(recent_low * 0.96, 2)
         take_profit_c1 = round(current_price + atr * 1.5, 2)
         take_profit_c2 = round(recent_high + atr * 1.0, 2)
     elif trade_point in ("strong_sell", "sell"):
