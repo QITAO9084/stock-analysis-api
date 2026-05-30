@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.30.0（修复trade_point与signal方向矛盾导致止损止盈反转）",
-    "version": "5.31.3"
+    "description": "股票/加密货币分析API - V5.32.0（信号评级A/B/C/D + 凯利仓位建议）",
+    "version": "5.32.0"
   },
   "servers": [
     {
@@ -270,6 +270,16 @@
               "default": "",
               "title": "Holdings"
             }
+          },
+          {
+            "name": "total_capital",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 6400,
+              "title": "Total Capital"
+            }
           }
         ],
         "responses": {
@@ -423,6 +433,16 @@
               "type": "string",
               "default": "",
               "title": "Holdings"
+            }
+          },
+          {
+            "name": "total_capital",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 6400,
+              "title": "Total Capital"
             }
           }
         ],

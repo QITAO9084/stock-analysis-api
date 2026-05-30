@@ -15,7 +15,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.31.3"
+    version="5.32.0"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -815,11 +815,369 @@ def build_operation_summary(fields: dict, holdings: list = None) -> str:
 """
 
 
-def build_formatted_report(fields: dict, holdings: list = None) -> str:
+def calculate_signal_rating(fields: dict) -> dict:
+    """V5.32: 信号评级系统 (A/B/C/D)
+
+    综合多因子打分，输出评级 + 详细评分明细。
+    用于帮助用户判断"这个信号值不值得操作"。
+    """
+    signal = str(fields.get("signal", "NEUTRAL"))
+    adx = fields.get("adx", 0) or 0
+    adx_trend = str(fields.get("adx_trend", ""))
+    rsi = fields.get("rsi", 0) or 0
+    kdj_j = fields.get("kdj_j", 0) or 0
+    kdj_k = fields.get("kdj_k", 0) or 0
+    kdj_d = fields.get("kdj_d", 0) or 0
+    volume_signal = str(fields.get("volume_signal", "normal"))
+    trade_point = str(fields.get("trade_point", "hold"))
+    current_price = fields.get("current_price", 0) or 0
+    ma20 = fields.get("ma20", 0) or 0
+    market_mult = fields.get("market_multiplier", 1.0) or 1.0
+    market_grade = str(fields.get("market_grade", "N/A"))
+    trade_score = fields.get("trade_score", 0) or 0
+    atr = fields.get("atr", 0) or 0
+    entry_a = fields.get("entry_a", 0) or 0
+    stop_loss_a = fields.get("stop_loss_a", 0) or 0
+    take_profit_a = fields.get("take_profit_a", 0) or 0
+
+    # ===== 维度一：信号质量 (35分) =====
+    detail_signal = {}
+
+    # ADX趋势强度 (10分)
+    if adx >= 35:
+        detail_signal["adx_strength"] = 10
+    elif adx >= 30:
+        detail_signal["adx_strength"] = 8
+    elif adx >= 25:
+        detail_signal["adx_strength"] = 6
+    elif adx >= 20:
+        detail_signal["adx_strength"] = 3
+    else:
+        detail_signal["adx_strength"] = 0
+
+    # 信号-ADX方向一致性 (10分)
+    is_buy_signal = signal in ("BUY", "STRONG_BUY")
+    is_sell_signal = signal in ("SELL", "STRONG_SELL")
+    is_bull_adx = "bull" in adx_trend.lower() and "bear" not in adx_trend.lower()
+    is_bear_adx = "bear" in adx_trend.lower()
+
+    if (is_buy_signal and is_bull_adx) or (is_sell_signal and is_bear_adx):
+        detail_signal["adx_align"] = 10
+    elif (is_buy_signal and is_bear_adx) or (is_sell_signal and is_bull_adx):
+        detail_signal["adx_align"] = 3  # 逆势信号
+    else:
+        detail_signal["adx_align"] = 5
+
+    # trade_point与signal一致 (8分)
+    tp_is_buy = trade_point in ("buy", "strong_buy")
+    tp_is_sell = trade_point in ("sell", "strong_sell")
+    if (is_buy_signal and tp_is_buy) or (is_sell_signal and tp_is_sell):
+        detail_signal["tp_consistent"] = 8
+    elif (is_buy_signal and trade_point == "hold") or (is_sell_signal and trade_point == "hold"):
+        detail_signal["tp_consistent"] = 4
+    else:
+        detail_signal["tp_consistent"] = 0
+
+    # 综合评分归一化 (7分)
+    if trade_score >= 70:
+        detail_signal["trade_score_grade"] = 7
+    elif trade_score >= 55:
+        detail_signal["trade_score_grade"] = 5
+    elif trade_score >= 40:
+        detail_signal["trade_score_grade"] = 3
+    else:
+        detail_signal["trade_score_grade"] = 0
+
+    signal_quality = sum(detail_signal.values())
+
+    # ===== 维度二：技术健康 (30分) =====
+    detail_tech = {}
+
+    # RSI健康度 (8分)
+    if 35 < rsi < 65:
+        detail_tech["rsi_health"] = 8
+    elif 30 <= rsi <= 35 or 65 <= rsi <= 70:
+        detail_tech["rsi_health"] = 5
+    elif rsi < 30:
+        detail_tech["rsi_health"] = 2  # 超卖（虽是买入机会，但技术面不健康）
+    elif rsi > 80:
+        detail_tech["rsi_health"] = 2  # 超买追高风险
+    else:
+        detail_tech["rsi_health"] = 4
+
+    # KDJ健康度 (8分)
+    if -10 <= kdj_j <= 100 and (is_buy_signal and kdj_k >= kdj_d or is_sell_signal and kdj_k <= kdj_d):
+        detail_tech["kdj_health"] = 8
+    elif -10 <= kdj_j <= 100:
+        detail_tech["kdj_health"] = 5
+    elif kdj_j < -10 or kdj_j > 110:
+        detail_tech["kdj_health"] = 2
+    else:
+        detail_tech["kdj_health"] = 4
+
+    # 成交量确认 (7分)
+    if volume_signal in ("high_volume", "above_avg") and signal != "NEUTRAL":
+        detail_tech["volume_confirm"] = 7
+    elif volume_signal == "above_avg":
+        detail_tech["volume_confirm"] = 5
+    elif volume_signal == "normal":
+        detail_tech["volume_confirm"] = 5
+    else:
+        detail_tech["volume_confirm"] = 3
+
+    # 价格相对MA20偏离度 (7分)
+    if ma20 > 0:
+        dev_pct = abs(current_price - ma20) / ma20 * 100
+        if dev_pct <= 3:
+            detail_tech["ma20_dev"] = 7
+        elif dev_pct <= 8:
+            detail_tech["ma20_dev"] = 5
+        elif dev_pct <= 15:
+            detail_tech["ma20_dev"] = 3
+        else:
+            detail_tech["ma20_dev"] = 1
+    else:
+        detail_tech["ma20_dev"] = 4
+
+    tech_health = sum(detail_tech.values())
+
+    # ===== 维度三：风险收益 (35分) =====
+    detail_risk = {}
+
+    # 盈亏比 (12分)
+    if entry_a > 0 and stop_loss_a > 0:
+        dist_a = abs(entry_a - stop_loss_a)
+        tp_a = abs(take_profit_a - entry_a)
+        rr_a = tp_a / dist_a if dist_a > 0 else 0
+    else:
+        rr_a = 0
+
+    if rr_a >= 2.5:
+        detail_risk["rr_ratio"] = 12
+    elif rr_a >= 2.0:
+        detail_risk["rr_ratio"] = 10
+    elif rr_a >= 1.5:
+        detail_risk["rr_ratio"] = 8
+    elif rr_a >= 1.0:
+        detail_risk["rr_ratio"] = 6
+    elif rr_a >= 0.8:
+        detail_risk["rr_ratio"] = 4
+    elif rr_a > 0:
+        detail_risk["rr_ratio"] = 1
+    else:
+        detail_risk["rr_ratio"] = 0
+
+    # 止损距离合理度 (10分) - 太近容易触发，太远风险过大
+    if entry_a > 0 and stop_loss_a > 0:
+        stop_dist_pct = abs(entry_a - stop_loss_a) / entry_a * 100
+    else:
+        stop_dist_pct = 999
+
+    if 5 <= stop_dist_pct <= 12:
+        detail_risk["stop_dist"] = 10
+    elif 3 <= stop_dist_pct < 5:
+        detail_risk["stop_dist"] = 8
+    elif 12 < stop_dist_pct <= 15:
+        detail_risk["stop_dist"] = 6
+    elif stop_dist_pct < 3:
+        detail_risk["stop_dist"] = 4
+    elif stop_dist_pct > 15:
+        detail_risk["stop_dist"] = 1
+    else:
+        detail_risk["stop_dist"] = 5
+
+    # 大盘因子 (8分)
+    if market_mult >= 1.10:
+        detail_risk["market_factor"] = 8
+    elif market_mult >= 1.05:
+        detail_risk["market_factor"] = 6
+    elif 1.0 <= market_mult < 1.05:
+        detail_risk["market_factor"] = 5
+    elif 0.90 <= market_mult < 1.0:
+        detail_risk["market_factor"] = 3
+    else:
+        detail_risk["market_factor"] = 2
+
+    # 波动率可控度 (5分)
+    if current_price > 0 and atr > 0:
+        atr_pct = atr / current_price * 100
+        if atr_pct < 3:
+            detail_risk["atr_controlled"] = 5
+        elif atr_pct < 5:
+            detail_risk["atr_controlled"] = 3
+        elif atr_pct < 8:
+            detail_risk["atr_controlled"] = 2
+        else:
+            detail_risk["atr_controlled"] = 1
+    else:
+        detail_risk["atr_controlled"] = 3
+
+    risk_reward = sum(detail_risk.values())
+
+    # ===== 综合评分 =====
+    total_score = signal_quality + tech_health + risk_reward
+
+    # ===== 自动降级/排除规则 =====
+    downgrades = []
+    exclusions = []
+
+    # ADX<20 震荡 → 降一级
+    if adx < 20:
+        downgrades.append(f"ADX={adx:.1f}<20，趋势不明朗")
+
+    # J>110 或 J<-10 → 降一级
+    if kdj_j > 110:
+        downgrades.append(f"KDJ J={kdj_j:.1f}>110，极度超买")
+    elif kdj_j < -10:
+        downgrades.append(f"KDJ J={kdj_j:.1f}<-10，极度超卖")
+
+    # RSI>85 超买追高 → 降一级
+    if rsi > 85:
+        downgrades.append(f"RSI={rsi:.1f}>85，极度超买追高风险")
+    if rsi < 15:
+        downgrades.append(f"RSI={rsi:.1f}<15，极度超卖")
+
+    # 止损距离>20% → 降一级
+    if stop_dist_pct > 20:
+        downgrades.append(f"止损距离{stop_dist_pct:.1f}%过大，风险失控")
+
+    # 应用降级
+    effective_score = total_score
+    for _ in downgrades:
+        effective_score = max(effective_score - 5, 0)
+
+    # 盈亏比<0.5 + 非NEUTRAL → 直接D级
+    if rr_a < 0.5 and signal != "NEUTRAL" and entry_a > 0:
+        exclusions.append(f"盈亏比仅1:{rr_a:.1f}，风险收益严重不匹配")
+        effective_score = min(effective_score, 40)
+
+    # ADX<20 震荡市 + NEUTRAL → 直接D级
+    if adx < 20 and signal == "NEUTRAL":
+        exclusions.append("震荡市+无明确信号，不建议任何操作")
+
+    # ===== 评级映射 =====
+    if effective_score >= 80:
+        rating = "A"
+        rating_label = "A级 -- 优质信号"
+        rating_desc = "多维度健康，建议按方案操作"
+    elif effective_score >= 65:
+        rating = "B"
+        rating_label = "B级 -- 合格信号"
+        rating_desc = "整体可接受，建议控制仓位"
+    elif effective_score >= 50:
+        rating = "C"
+        rating_label = "C级 -- 偏弱信号"
+        rating_desc = "多个维度有瑕疵，建议观望或极小仓位试探"
+    else:
+        rating = "D"
+        rating_label = "D级 -- 不建议操作"
+        rating_desc = "技术面或风险收益不达标，建议放弃此信号"
+
+    return {
+        "rating": rating,
+        "rating_label": rating_label,
+        "rating_desc": rating_desc,
+        "total_score": total_score,
+        "effective_score": effective_score,
+        "max_score": 100,
+        "dimensions": {
+            "signal_quality": {"score": signal_quality, "max": 35, "details": detail_signal},
+            "tech_health": {"score": tech_health, "max": 30, "details": detail_tech},
+            "risk_reward": {"score": risk_reward, "max": 35, "details": detail_risk},
+        },
+        "downgrades": downgrades,
+        "exclusions": exclusions,
+        "rr_a": round(rr_a, 1),
+        "stop_dist_pct": round(stop_dist_pct, 1) if stop_dist_pct < 999 else 0,
+    }
+
+
+def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: float = 6400) -> dict:
+    """V5.32: 凯利公式仓位建议
+
+    f* = (p*b - q) / b  ->  Half-Kelly ->  rating_cap ->  risk_cap
+
+    - total_capital: 总资金（默认 $6,400 ~ 5万HKD）
+    """
+    rating = rating_data["rating"]
+    rr_a = rating_data.get("rr_a", 0)
+    entry_a = fields.get("entry_a", 0) or 0
+    stop_loss_a = fields.get("stop_loss_a", 0) or 0
+    current_price = fields.get("current_price", 0) or 0
+    currency = str(fields.get("currency", "USD"))
+    signal = str(fields.get("signal", "NEUTRAL"))
+
+    # 胜率估计（基于评级）
+    win_probs = {"A": 0.60, "B": 0.50, "C": 0.40, "D": 0.30}
+    p = win_probs.get(rating, 0.40)
+    q = 1 - p
+
+    # 凯利公式
+    if rr_a > 0 and p > 0:
+        kelly = (p * rr_a - q) / rr_a
+    else:
+        kelly = 0
+
+    # Half-Kelly 折半（保守）
+    half_kelly = max(kelly / 2, 0)
+
+    # 评级仓位上限
+    rating_caps = {"A": 0.20, "B": 0.15, "C": 0.10, "D": 0}
+    rating_cap = rating_caps.get(rating, 0.10)
+
+    # 硬上限 25%
+    HARD_CAP = 0.25
+
+    # 风险约束：单笔亏损 <= 总资金 2%
+    if entry_a > 0 and stop_loss_a > 0 and current_price > 0:
+        dist_per_share = abs(entry_a - stop_loss_a)
+        max_shares_by_risk = int((total_capital * 0.02) / dist_per_share) if dist_per_share > 0 else 0
+        position_by_risk_pct = (max_shares_by_risk * current_price) / total_capital if total_capital > 0 else 0
+    else:
+        max_shares_by_risk = 0
+        position_by_risk_pct = 999
+
+    # 取最小值
+    suggested_pct = min(half_kelly, rating_cap, HARD_CAP, position_by_risk_pct * 1.0 if position_by_risk_pct < 999 else 1.0)
+
+    if rating == "D":
+        suggested_pct = 0
+
+    # 转为实际股数
+    if suggested_pct > 0 and current_price > 0:
+        position_amount = total_capital * suggested_pct
+        shares = int(position_amount / current_price)
+    else:
+        position_amount = 0
+        shares = 0
+
+    # 单笔最大亏损
+    if entry_a > 0 and stop_loss_a > 0 and shares > 0:
+        max_loss = abs(entry_a - stop_loss_a) * shares
+    else:
+        max_loss = 0
+
+    return {
+        "suggested_pct": round(suggested_pct * 100, 1),
+        "position_amount": round(position_amount, 0),
+        "shares": shares,
+        "max_loss": round(max_loss, 0),
+        "max_loss_pct": round(max_loss / total_capital * 100, 1) if total_capital > 0 else 0,
+        "kelly_raw": round(kelly * 100, 1),
+        "half_kelly": round(half_kelly * 100, 1),
+        "rating_cap": round(rating_cap * 100, 1),
+        "risk_cap": round(position_by_risk_pct * 100, 1) if position_by_risk_pct < 999 else "inf",
+        "total_capital": total_capital,
+        "currency": currency,
+    }
+
+
+def build_formatted_report(fields: dict, holdings: list = None, total_capital: float = 6400) -> str:
     """预渲染完整技术分析报告，Agent 直接原样输出。
 
     所有计算逻辑在 API 层完成，Agent 只是一个管道。
     V5.25: 盈亏比过滤 + 大盘因子 + 仓位引擎
+    V5.32: 信号评级(A/B/C/D) + 凯利公式仓位建议
     """
     signal = str(fields.get("signal", "N/A"))
     adx = fields.get("adx", 0)
@@ -958,6 +1316,51 @@ def build_formatted_report(fields: dict, holdings: list = None) -> str:
     # 操盘摘要（对标持仓）
     operation_summary = build_operation_summary(fields, holdings)
 
+    # V5.32: 信号评级 + 仓位建议
+    rating_data = calculate_signal_rating(fields)
+    position_data = calculate_position_sizing(fields, rating_data, total_capital)
+
+    # 构建评级明细块
+    dims = rating_data["dimensions"]
+    dim_lines = []
+    dim_names = {"signal_quality": "信号质量", "tech_health": "技术健康", "risk_reward": "风险收益"}
+    detail_names_signal = {"adx_strength": "ADX强度", "adx_align": "方向一致", "tp_consistent": "买卖点一致", "trade_score_grade": "综合评分"}
+    detail_names_tech = {"rsi_health": "RSI健康", "kdj_health": "KDJ健康", "volume_confirm": "量能确认", "ma20_dev": "均线偏离"}
+    detail_names_risk = {"rr_ratio": "盈亏比", "stop_dist": "止损距离", "market_factor": "大盘因子", "atr_controlled": "波动可控"}
+
+    for dim_key, dim_label in dim_names.items():
+        d = dims[dim_key]
+        dim_lines.append(f"  {dim_label}：{d['score']}/{d['max']}分")
+        if dim_key == "signal_quality":
+            for k, v in d["details"].items():
+                dim_lines.append(f"    - {detail_names_signal.get(k, k)}：{v}/10" if k in ("adx_strength", "adx_align") else f"    - {detail_names_signal.get(k, k)}：{v}/8" if k in ("tp_consistent", "trade_score_grade") else f"    - {detail_names_signal.get(k, k)}：{v}")
+        elif dim_key == "tech_health":
+            for k, v in d["details"].items():
+                dim_lines.append(f"    - {detail_names_tech.get(k, k)}：{v}/8" if k in ("rsi_health", "kdj_health") else f"    - {detail_names_tech.get(k, k)}：{v}/7" if k in ("volume_confirm", "ma20_dev") else f"    - {detail_names_tech.get(k, k)}：{v}")
+        elif dim_key == "risk_reward":
+            for k, v in d["details"].items():
+                dim_lines.append(f"    - {detail_names_risk.get(k, k)}：{v}/12" if k == "rr_ratio" else f"    - {detail_names_risk.get(k, k)}：{v}/10" if k == "stop_dist" else f"    - {detail_names_risk.get(k, k)}：{v}/8" if k == "market_factor" else f"    - {detail_names_risk.get(k, k)}：{v}/5" if k == "atr_controlled" else f"    - {detail_names_risk.get(k, k)}：{v}")
+
+    rating_detail_text = "\n".join(dim_lines)
+
+    # 降级/排除警告
+    warning_lines = []
+    for d in rating_data.get("downgrades", []):
+        warning_lines.append(f"  WARNING 降级：{d}")
+    for e in rating_data.get("exclusions", []):
+        warning_lines.append(f"  FORBIDDEN 排除：{e}")
+    warning_text = "\n".join(warning_lines) if warning_lines else ""
+
+    # 仓位建议文本
+    if position_data["suggested_pct"] > 0:
+        pos_text = f"""建议仓位：{position_data['suggested_pct']}%（~{position_data['currency']}{position_data['position_amount']:,.0f}，约 {position_data['shares']} 股）
+单笔最大亏损：{position_data['currency']}{position_data['max_loss']:,.0f}（{position_data['max_loss_pct']}%总资金）
+总资金基准：{position_data['currency']}{position_data['total_capital']:,.0f}
+算法：Half-Kelly ({position_data['half_kelly']}%) x 评级上限({position_data['rating_cap']}%) x 风险约束(<=2%)"""
+    else:
+        pos_text = f"""建议仓位：0%（不建议入场）
+原因：评级 {rating_data['rating']} 级（{rating_data['rating_desc']}）"""
+
     report = f"""【{fields.get('name', 'N/A')}（{fields.get('symbol', 'N/A')}）技术分析报告】
 生成时间：{fields.get('analysis_time', 'N/A')}
 当前价格：{fields.get('current_price', 0):.2f} {currency}  ({change_pct:+.2f}%)
@@ -965,9 +1368,21 @@ ADX趋势强度：{adx:.1f}（{fields.get('adx_trend', 'N/A')}）| 评分：{sco
 大盘环境：{mkt_name} {mkt_price:.2f}（近30日 {mkt_change:+.1f}%，{mkt_grade}）
 
 {operation_summary}
-━━━━━━━━━━━━━━━━━━
-📊 信号诊断
-━━━━━━━━━━━━━━━━━━
+__________________________________________________
+SIGNAL RATING
+__________________________________________________
+{rating_data['rating_label']}（综合 {rating_data['effective_score']}/{rating_data['max_score']} 分）-- {rating_data['rating_desc']}
+{warning_text}
+{rating_detail_text}
+
+__________________________________________________
+POSITION SUGGESTION (凯利公式)
+__________________________________________________
+{pos_text}
+
+__________________________________________________
+SIGNAL DIAGNOSIS
+__________________________________________________
 信号(signal)：{signal}
 置信度(confidence)：{fields.get('confidence', 'N/A')}
 买卖点(trade_point)：{fields.get('trade_point_cn', 'N/A')}
@@ -1007,7 +1422,7 @@ KDJ：K={fields.get('kdj_k', 0):.1f} D={fields.get('kdj_d', 0):.1f} J={fields.ge
 
 
 @app.get("/stock/analyze2")
-def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str = ""):
+def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str = "", total_capital: float = 6400):
     """
     扁平化股票分析接口（专为 Coze 插件优化）
 
@@ -1017,6 +1432,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
     - **symbol**: 股票代码（如 AAPL, 00700.HK）
     - **market**: 市场（us/hk/cn）
     - **holdings**: 持仓信息（可选），JSON 格式: [{"symbol":"TSLA","shares":10,"cost":420.5}]
+    - **total_capital**: 总资金（默认 $6,400 ~ 5万HKD），用于仓位计算
     """
     if symbol == "auto" or not symbol:
         symbol = "AAPL"
@@ -1263,8 +1679,19 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
                 result["stop_loss_c"] = round(rs * 1.03, 2)
                 result["take_profit_c1"] = round(sp * 0.98, 2)
                 result["take_profit_c2"] = round(sp * 0.95, 2)
+        # V5.32: 信号评级 + 仓位建议（先算再入 result）
+        rating_data = calculate_signal_rating(result)
+        position_data = calculate_position_sizing(result, rating_data, total_capital)
+        result["signal_rating"] = rating_data["rating"]
+        result["signal_rating_label"] = rating_data["rating_label"]
+        result["signal_rating_score"] = rating_data["effective_score"]
+        result["position_pct"] = position_data["suggested_pct"]
+        result["position_shares"] = position_data["shares"]
+        result["position_amount"] = position_data["position_amount"]
+        result["position_max_loss"] = position_data["max_loss"]
+
         # V5.24: API层预渲染完整报告，Agent只需原样输出 formatted_report
-        result["formatted_report"] = build_formatted_report(result, holdings_list)
+        result["formatted_report"] = build_formatted_report(result, holdings_list, total_capital)
         return result
     except HTTPException:
         raise
