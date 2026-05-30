@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.27.0（持仓面板 + 逆大盘方向警告）",
+    "description": "股票/加密货币分析API - V5.27.0（持仓面板 + compare管道统一 + 逆大盘方向警告）",
     "version": "5.27.0"
   },
   "servers": [
@@ -392,7 +392,7 @@
     "/stock/compare": {
       "get": {
         "summary": "Compare Stocks",
-        "description": "多股对比分析接口（专为 Coze 插件优化，扁平化返回）\n\n传入多个股票代码（逗号分隔），返回每只股票的核心指标对比。\n最多支持5只股票同时对比。\n\n- **symbols**: 股票代码，逗号分隔（如 \"AAPL,MSFT,GOOG\"）\n- **market**: 市场（us/hk）",
+        "description": "多股对比分析接口（管道转发版）\\n\\n传入多个股票代码（逗号分隔），返回格式化对比报告。\\n最多支持5只股票同时对比。\\n\\n- **symbols**: 股票代码，逗号分隔（如 \"AAPL,MSFT,GOOG\"）\\n- **market**: 市场（us/hk）\\n- **holdings**: 持仓信息（可选），JSON 格式: [{\\\"symbol\\\":\\\"TSLA\\\",\\\"shares\\\":10,\\\"cost\\\":420.5}]",
         "operationId": "compare_stocks_stock_compare_get",
         "parameters": [
           {
@@ -414,6 +414,16 @@
               "default": "us",
               "title": "Market"
             }
+          },
+          {
+            "name": "holdings",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Holdings"
+            }
           }
         ],
         "responses": {
@@ -421,7 +431,15 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "formatted_report": {
+                      "type": "string",
+                      "title": "Formatted Report"
+                    }
+                  }
+                }
               }
             }
           },

@@ -1516,19 +1516,198 @@ def backtest(symbol: str = "AAPL", market: str = "us", days: int = 60):
 
 # ==================== V3: 多股对比 & 加密货币 ====================
 
-@app.get("/stock/compare")
-def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us"):
-    """
-    多股对比分析接口（专为 Coze 插件优化，扁平化返回）
+def build_compare_report(results: list, summary: dict, holdings: list = None, mkt_trend: dict = None, analysis_time: str = "") -> str:
+    """预渲染多股对比报告，Agent 直接原样输出。
 
-    传入多个股票代码（逗号分隔），返回每只股票的核心指标对比。
+    results: 每只股票的指标列表
+    summary: 汇总统计
+    holdings: 用户持仓（用于操作建议中对标成本）
+    mkt_trend: 大盘环境
+    """
+    currency = "USD"
+    mkt_name = mkt_trend.get("name", "标普500") if mkt_trend else "大盘"
+    mkt_price = mkt_trend.get("price", 0) or 0
+    mkt_change = mkt_trend.get("change", 0) or 0
+
+    # 持仓对照表
+    hold_map = {}
+    if holdings:
+        for h in holdings:
+            sym = str(h.get("symbol", "")).upper()
+            mkt = "us" if not sym.isdigit() else "cn"
+            try:
+                nsym, _ = normalize_stock_symbol(sym, mkt if not sym.isdigit() else ("hk" if len(sym) in (4, 5) and sym.isdigit() else "cn"))
+            except Exception:
+                nsym = sym
+            hold_map[nsym] = {"shares": int(h.get("shares", 0)), "cost": float(h.get("cost", 0))}
+
+    # 对比汇总表格
+    now_str = analysis_time or datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    mkt_line = ""
+    if mkt_price:
+        mkt_line = f"大盘环境：{mkt_name} {mkt_price:.2f}（近30日 {mkt_change:+.1f}%）"
+
+    lines = [
+        f"【多股对比分析报告】",
+        f"生成时间：{now_str}",
+        "",
+        "━━━━━━━━━━━━━━━━━━",
+        "📊 对比汇总",
+        "━━━━━━━━━━━━━━━━━━",
+        mkt_line if mkt_line else "",
+        "",
+        "| 股票 | 信号 | 置信度 | 当前价 | RSI | ADX | 评分 |",
+        "|------|------|--------|--------|-----|-----|------|",
+    ]
+
+    valid_results = [r for r in results if r.get("status") == "ok"]
+    for r in results:
+        if r.get("status") != "ok":
+            lines.append(f"| {r['symbol']} | — | — | — | — | — | — |")
+            continue
+        sig = str(r.get("signal", "NEUTRAL"))
+        conf = str(r.get("confidence", "N/A"))
+        price = r.get("current_price", 0) or 0
+        rsi_val = r.get("rsi", 0) or 0
+        adx_val = r.get("adx", 0) or 0
+        score = r.get("score", 0) or 0
+        lines.append(f"| {r['symbol']} | {sig} | {conf} | {price:.2f} | {rsi_val:.1f} | {adx_val:.1f} | {score} |")
+
+    # 汇总行
+    if valid_results:
+        sorted_sig = sorted(valid_results, key=lambda x: x.get("score", 0), reverse=True)
+        best = sorted_sig[0]
+        worst = sorted_sig[-1]
+        summary_line = f"| 汇总 | {best['symbol']}表现优于{worst['symbol']}，{best['symbol']}为{best.get('signal','N/A')}信号，{worst['symbol']}为{worst.get('signal','N/A')}信号 |"
+    else:
+        summary_line = "| 汇总 | 无有效数据 |"
+    lines.append(summary_line)
+
+    # 逆大盘方向检测
+    counter_alerts = []
+    if abs(mkt_change) > 3:
+        for r in valid_results:
+            sig = str(r.get("signal", ""))
+            if sig in ("SELL", "STRONG_SELL") and mkt_change > 3:
+                counter_alerts.append(f"⚠️ {r['symbol']} 空头信号与{mkt_name}趋势（+{mkt_change:.1f}%）背离，信号可靠性降低")
+            elif sig in ("BUY", "STRONG_BUY") and mkt_change < -3:
+                counter_alerts.append(f"⚠️ {r['symbol']} 多头信号与{mkt_name}趋势（{mkt_change:+.1f}%）背离，信号可靠性降低")
+
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    lines.append("🎯 操作建议")
+    lines.append("━━━━━━━━━━━━━━━━━━")
+
+    for r in results:
+        if r.get("status") != "ok":
+            lines.append(f"- **{r['symbol']}**：数据获取失败，无法分析")
+            continue
+
+        sym = str(r.get("symbol", ""))
+        sig = str(r.get("signal", "NEUTRAL"))
+        price = r.get("current_price", 0) or 0
+        rsi_val = r.get("rsi", 0) or 0
+        adx_val = r.get("adx", 0) or 0
+        adx_trend = str(r.get("adx_trend", ""))
+
+        # 持仓对标
+        h = hold_map.get(sym)
+        if h:
+            shares = h["shares"]
+            cost = h["cost"]
+            if shares > 0 and cost > 0:
+                pnl = (price - cost) * shares
+                pnl_pct = (price - cost) / cost * 100
+                if pnl > 0:
+                    status = f"处于盈利状态（成本{currency}{cost:.2f}，浮盈{currency}{pnl:+,.0f} / {pnl_pct:+.1f}%）"
+                else:
+                    status = f"处于亏损状态（成本{currency}{cost:.2f}，浮亏{currency}{pnl:+,.0f} / {pnl_pct:+.1f}%）"
+            else:
+                status = ""
+                pnl_pct = 0
+        else:
+            status = ""
+            pnl_pct = 0
+
+        # 操作建议
+        if sig in ("BUY", "STRONG_BUY"):
+            if h and pnl_pct < -15:
+                advice = f"多头信号，但浮亏较大（{pnl_pct:+.1f}%），建议继续持有等待反弹，若跌破近期支撑则止损"
+            elif h and pnl_pct > 20:
+                advice = "多头信号且大幅盈利，建议继续持有，可适当上调止损保护利润"
+            elif h:
+                advice = "多头信号且持仓中，建议继续持有"
+            else:
+                advice = "多头信号，可考虑建仓"
+        elif sig in ("SELL", "STRONG_SELL"):
+            if h and shares > 0:
+                advice = "空头信号且持仓中，建议卖出止损，避免进一步亏损"
+            else:
+                advice = "空头信号，不建议建仓，观望为主"
+        else:
+            if adx_val < 25:
+                advice = "震荡市，建议观望"
+            elif h:
+                advice = "信号中性，继续持有观察"
+            else:
+                advice = "信号中性，等待更明确方向"
+
+        rec = f"当前价{price:.2f} {currency}"
+        if status:
+            rec += f"，{status}"
+        rec += f"。技术面{'多头' if sig in ('BUY','STRONG_BUY') else '空头' if sig in ('SELL','STRONG_SELL') else '中性'}趋势（ADX={adx_val:.1f}，{adx_trend}）"
+        rec += f"，{advice}。"
+
+        lines.append(f"- **{r['symbol']}**：{rec}")
+
+    if counter_alerts:
+        lines.append("")
+        lines.append("⚠️ 逆大盘方向提醒：")
+        lines.extend(counter_alerts)
+
+    return "\n".join(lines)
+
+
+@app.get("/stock/compare")
+def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us", holdings: str = ""):
+    """
+    多股对比分析接口（专为 Coze 插件优化，管道转发）
+
+    传入多个股票代码（逗号分隔），返回格式化对比报告。
     最多支持5只股票同时对比。
 
     - **symbols**: 股票代码，逗号分隔（如 "AAPL,MSFT,GOOG"）
     - **market**: 市场（us/hk）
+    - **holdings**: 持仓信息（可选），JSON 格式: [{"symbol":"TSLA","shares":10,"cost":420.5}]
     """
     if market == "auto" or not market:
         market = "us"
+
+    # 解析持仓
+    holdings_list = None
+    if holdings:
+        try:
+            holdings_list = json.loads(holdings)
+        except (json.JSONDecodeError, TypeError):
+            holdings_list = None
+
+    # 大盘环境
+    mkt_trend = {}
+    try:
+        mkt = get_market_trend(market)
+        mkt_trend["name"] = mkt.get("market_index_name", "标普500")
+        mkt_trend["price"] = mkt.get("market_index_price", 0) or 0
+        mkt_trend["change"] = mkt.get("market_change_30d", 0) or 0
+    except Exception:
+        mkt_trend = {"name": "N/A", "price": 0, "change": 0}
+
+    # 大盘因子
+    mkt_factor = 1.0
+    if abs(mkt_trend.get("change", 0)) > 3:
+        if mkt_trend["change"] > 3:
+            mkt_factor = 1.10
+        elif mkt_trend["change"] < -3:
+            mkt_factor = 0.85
 
     try:
         symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
@@ -1560,14 +1739,36 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us"):
                 prev_close = round(data['Close'].iloc[-2], 2) if len(data) > 1 else current_price
                 change_percent = round((current_price - prev_close) / prev_close * 100, 2) if prev_close != 0 else 0
 
+                # ADX
+                adx_data = calculate_adx(data)
+                adx_val = adx_data["adx"]
+                adx_trend = adx_data["trend"]
+
+                # 简易评分（对齐 analyze2 风格）
+                sig = str(signal_data["signal"])
+                if sig == "STRONG_BUY":
+                    raw_score = 80
+                elif sig == "BUY":
+                    raw_score = 60
+                elif sig == "STRONG_SELL":
+                    raw_score = 20
+                elif sig == "SELL":
+                    raw_score = 40
+                else:
+                    raw_score = 50
+                score = int(raw_score * mkt_factor)
+
                 results.append({
                     "symbol": sym,
                     "name": str(info.get("longName", sym)),
                     "current_price": current_price,
                     "change_percent": change_percent,
-                    "signal": str(signal_data["signal"]),
+                    "signal": sig,
                     "confidence": str(signal_data["confidence"]),
                     "rsi": round(indicators["rsi"], 2),
+                    "adx": adx_val,
+                    "adx_trend": adx_trend,
+                    "score": score,
                     "macd_cross": str("golden" if indicators["macd"]["golden_cross"] else ("death" if indicators["macd"]["death_cross"] else "none")),
                     "macd_histogram": round(indicators["macd"]["histogram"], 4),
                     "kdj_k": round(indicators["kdj"]["k"], 2),
@@ -1586,20 +1787,19 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us"):
                     "error": str(e)
                 })
 
-        # 计算对比维度：谁最强/最弱
+        # 计算对比维度
         valid_results = [r for r in results if r["status"] == "ok"]
         summary = {}
         if valid_results:
-            # RSI最低的（最接近超卖，可能反弹机会）
             rsi_sorted = sorted(valid_results, key=lambda x: x["rsi"])
             summary["rsi_lowest"] = {"symbol": rsi_sorted[0]["symbol"], "rsi": rsi_sorted[0]["rsi"]}
-            # RSI最高的（最接近超买，回调风险最大）
             summary["rsi_highest"] = {"symbol": rsi_sorted[-1]["symbol"], "rsi": rsi_sorted[-1]["rsi"]}
-            # 涨幅最大
             change_sorted = sorted(valid_results, key=lambda x: x["change_percent"], reverse=True)
             summary["best_performer"] = {"symbol": change_sorted[0]["symbol"], "change": change_sorted[0]["change_percent"]}
-            # 跌幅最大
             summary["worst_performer"] = {"symbol": change_sorted[-1]["symbol"], "change": change_sorted[-1]["change_percent"]}
+
+        analysis_time = datetime.now().isoformat()
+        formatted_report = build_compare_report(results, summary, holdings_list, mkt_trend, analysis_time)
 
         return {
             "market": market,
@@ -1607,7 +1807,8 @@ def compare_stocks(symbols: str = "AAPL,MSFT,GOOG", market: str = "us"):
             "success": len(valid_results),
             "stocks_text": json.dumps(results, ensure_ascii=False),
             "summary_text": json.dumps(summary, ensure_ascii=False),
-            "analysis_time": datetime.now().isoformat()
+            "formatted_report": formatted_report,
+            "analysis_time": analysis_time
         }
 
     except HTTPException:
