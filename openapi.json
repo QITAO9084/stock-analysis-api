@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.29.0（symbols内嵌holdings绕过方案）",
-    "version": "5.29.0"
+    "description": "股票/加密货币分析API - V5.30.0（修复trade_point与signal方向矛盾导致止损止盈反转）",
+    "version": "5.30.0"
   },
   "servers": [
     {

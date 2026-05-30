@@ -8,14 +8,14 @@ import json
 import sys
 import os as _os
 
-# V5.29.0: symbols内嵌holdings绕过方案（TSLA|10|420,GOOG|5|400格式） + 清理V5.28.x调试代码
+# V5.30.0: 修复trade_point与signal方向矛盾+止损止盈方向反转（^GSPC buy信号卖方向止损）
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.29.0"
+    version="5.30.0"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1101,14 +1101,26 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
             if final_signal == "HOLD":
                 final_signal = "NEUTRAL"
             # 2. 防止 event-driven 评分为 hold 但加权方向明确
-            if trade_points["trade_point"] == "hold":
-                orig_signal = signal_data["signal"]
+            # V5.30: 也处理 trade_point 与 signal 方向矛盾的情况
+            # detect_trade_points 因 KDJ/MACD 具体值可能判 sell，但总体加权信号是 BUY
+            # （如 ^GSPC：KDJ 超买 J=104 → 卖分高，但 ADX 强牛 + 均线多头 → 总评 BUY）
+            tp = trade_points["trade_point"]
+            orig_signal = signal_data["signal"]
+            if tp == "hold":
                 if orig_signal == "BUY":
                     final_trade_point = "buy"
                     final_trade_point_cn = f"建议买入（ADX={adx_val}，{adx_trend}）"
                 elif orig_signal == "SELL":
                     final_trade_point = "sell"
                     final_trade_point_cn = f"建议卖出（ADX={adx_val}，{adx_trend}）"
+            elif tp in ("sell", "strong_sell") and orig_signal in ("BUY", "STRONG_BUY"):
+                # V5.30: detect_trade_points 判卖但总信号是买 → 方向矛盾修正
+                final_trade_point = "buy"
+                final_trade_point_cn = f"建议买入（ADX={adx_val}，{adx_trend}，信号方向修正）"
+            elif tp in ("buy", "strong_buy") and orig_signal in ("SELL", "STRONG_SELL"):
+                # V5.30: detect_trade_points 判买但总信号是卖 → 方向矛盾修正
+                final_trade_point = "sell"
+                final_trade_point_cn = f"建议卖出（ADX={adx_val}，{adx_trend}，信号方向修正）"
 
         result = {
             # 基础信息
@@ -1190,9 +1202,10 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
             # V5.25: ATR 用于仓位计算
             "atr": trade_points.get("atr", 0),
         }
-        # V5.28: ADX方向覆盖时修正三套方案值（止损优先MA50支撑）
-        # 当 detect_trade_points 内部判定为 hold，但 ADX≥25 时显示覆盖为 buy/sell
-        # 此时三套方案的止损/止盈方向需要同步修正
+        # V5.28+/V5.30: ADX方向覆盖时修正三套方案值（止损优先MA50支撑）
+        # 当 detect_trade_points 内部判定与 final_trade_point 不同时触发
+        # V5.30: 新增 sell→buy / buy→sell 的矛盾修正（如 ^GSPC：KDJ超卖但总信号BUY）
+        # 此时 final_trade_point = "buy"，trade_points["trade_point"] = "sell" → 触发此段覆盖
         if final_trade_point != trade_points["trade_point"]:
             sp = signal_data["support_level"]
             rs = signal_data["resistance_level"]
