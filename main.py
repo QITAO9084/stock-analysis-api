@@ -8,14 +8,14 @@ import json
 import sys
 import os as _os
 
-# V5.28.0: ADX趋势分级（mild_bull/bear） + RSI动能诊断 + 方案A/B止损改MA50支撑
+# V5.28.1: 修复 ADX覆盖段止损MA50生效 + 方案A文案修正（强趋势→趋势明确）
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.28.0"
+    version="5.28.1"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -882,13 +882,13 @@ def build_formatted_report(fields: dict, holdings: list = None) -> str:
 
     # 方案A适用场景
     if signal in ("BUY", "STRONG_BUY"):
-        scenario_a = "ADX≥25 强趋势，顺势操作（买入方向）"
+        scenario_a = "ADX趋势明确（≥25），顺势操作（买入方向）"
     elif signal in ("SELL", "STRONG_SELL"):
-        scenario_a = "ADX≥25 强趋势，顺势操作（卖出方向）"
+        scenario_a = "ADX趋势明确（≥25），顺势操作（卖出方向）"
     elif signal in ("NEUTRAL", "HOLD"):
-        scenario_a = "ADX≥25 趋势明确，但买卖信号打架，建议观望等待方向明确"
+        scenario_a = "ADX趋势明确（≥25），但买卖信号打架，建议观望等待方向明确"
     else:
-        scenario_a = f"ADX≥25 强趋势，顺势操作（{signal}方向）"
+        scenario_a = f"ADX趋势明确（≥25），顺势操作（{signal}方向）"
 
     # 三套方案文案
     if adx < 25:
@@ -1190,18 +1190,25 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
             # V5.25: ATR 用于仓位计算
             "atr": trade_points.get("atr", 0),
         }
-        # V5.24.1: ADX方向覆盖时修正三套方案值
+        # V5.28: ADX方向覆盖时修正三套方案值（止损优先MA50支撑）
         # 当 detect_trade_points 内部判定为 hold，但 ADX≥25 时显示覆盖为 buy/sell
         # 此时三套方案的止损/止盈方向需要同步修正
         if final_trade_point != trade_points["trade_point"]:
             sp = signal_data["support_level"]
             rs = signal_data["resistance_level"]
+            ma50_ref = indicators.get("ma50", 0) or 0  # V5.28: MA50用于止损修正
             if final_trade_point in ("buy", "strong_buy"):
-                result["stop_loss_a"] = round(sp * 0.98, 2)
+                # 止损优先用MA50支撑（技术支撑比简单支持位更可靠）
+                if ma50_ref and ma50_ref > sp:
+                    result["stop_loss_a"] = round(ma50_ref * 0.99, 2)
+                    result["stop_loss_b"] = round(ma50_ref * 0.98, 2)
+                    result["stop_loss_c"] = round(ma50_ref * 0.96, 2)
+                else:
+                    result["stop_loss_a"] = round(sp * 0.98, 2)
+                    result["stop_loss_b"] = round(current_price - (rs - sp) * 0.5, 2)
+                    result["stop_loss_c"] = round(sp * 0.96, 2)
                 result["take_profit_a"] = round(rs * 1.01, 2)
-                result["stop_loss_b"] = round(current_price - (rs - sp) * 0.5, 2)
                 result["take_profit_b"] = round(rs * 1.03, 2)
-                result["stop_loss_c"] = round(sp * 0.96, 2)
                 result["take_profit_c1"] = round(rs * 1.02, 2)
                 result["take_profit_c2"] = round(rs * 1.05, 2)
             elif final_trade_point in ("sell", "strong_sell"):
