@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.32.1（修复SELL仓位+BUY保底仓位）",
-    "version": "5.32.1"
+    "description": "股票/加密货币分析API - V5.32.2（仓位不足1股警告+SELL隐藏仓位表）",
+    "version": "5.32.2"
   },
   "servers": [
     {

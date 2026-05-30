@@ -8,14 +8,14 @@ import json
 import sys
 import os as _os
 
-# V5.32.1: 修复SELL信号仓位+B级Kelly=0保底仓位
+# V5.32.2: 仓位不足1股警告+SELL信号隐藏仓位管理表
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.32.1"
+    version="5.32.2"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1319,8 +1319,10 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
   💡 适用场景：价格处于关键支撑/阻力附近，不确定突破方向"""
 
     # 仓位计算引擎
+    # V5.32.2: SELL信号隐藏仓位管理表（避免"建议买入"的误导）
+    is_sell_signal = signal in ("SELL", "STRONG_SELL")
     position_text = ""
-    if adx >= 25 and rr_a >= 1.0 and entry_a > 0:
+    if not is_sell_signal and adx >= 25 and rr_a >= 1.0 and entry_a > 0:
         atr = fields.get("atr", 0) or 0
         if atr > 0 and dist_a > 0:
             accounts = [5000, 10000, 25000, 50000, 100000]
@@ -1331,7 +1333,7 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
                 pos_lines.append(f"  ${acc/1000:.0f}K 账户：{shares} 股（风险 {currency}{risk_amount:.0f}）")
             position_text = f"""
 ━━━━━━━━━━━━━━━━━━
-💰 仓位管理（单笔风险≤2%，基于方案A止损 {dist_a:.2f} {currency}）
+💰 仓位管理（单笔风险≤2%，基于方案A止损 {dist_a:.2f} {currency}，仅供做多参考）
 ━━━━━━━━━━━━━━━━━━
 """ + "\n".join(pos_lines) + f"\n  ATR(14)：{atr:.2f} {currency}"
 
@@ -1389,10 +1391,15 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
         floor_note = ""
         if floor_applied:
             floor_note = f"\n⚠️  盈亏比偏低（1:{rating_data['rr_a']:.1f}），Kelly公式建议0%，但评级{rating_data['rating']}级信号合格，启用保底仓位"
+        # V5.32.2: 仓位不足1股时加警告
+        shares = position_data.get("shares", 0)
+        fractional_note = ""
+        if shares == 0:
+            fractional_note = f"\n⚠️  当前仓位金额（{position_data['currency']}{position_data['position_amount']:,.0f}）不足以购买1股（单价 {position_data['currency']}{fields.get('current_price', 0):.2f}），实际无法执行"
         pos_text = f"""建议仓位：{position_data['suggested_pct']}%（~{position_data['currency']}{position_data['position_amount']:,.0f}，约 {position_data['shares']} 股）
 单笔最大亏损：{position_data['currency']}{position_data['max_loss']:,.0f}（{position_data['max_loss_pct']}%总资金）
 总资金基准：{position_data['currency']}{position_data['total_capital']:,.0f}
-算法：Half-Kelly ({position_data['half_kelly']}%) x 评级上限({position_data['rating_cap']}%) x 风险约束(<=2%){floor_note}"""
+算法：Half-Kelly ({position_data['half_kelly']}%) x 评级上限({position_data['rating_cap']}%) x 风险约束(<=2%){floor_note}{fractional_note}"""
     elif reason:
         pos_text = f"""建议仓位：0%（不建议入场）
 原因：{reason}"""
