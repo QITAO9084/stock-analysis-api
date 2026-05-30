@@ -8,14 +8,14 @@ import json
 import sys
 import os as _os
 
-# V5.26.0: 持仓跟踪 + 操盘摘要（holdings参数 → build_operation_summary）
+# V5.27.0: 持仓面板 /stock/portfolio + 逆大盘方向警告（操盘摘要检测个股信号 vs 市场背离）
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.26.0"
+    version="5.27.0"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -699,6 +699,15 @@ def build_operation_summary(fields: dict, holdings: list = None) -> str:
     adx = fields.get("adx", 0) or 0
     adx_trend = str(fields.get("adx_trend", ""))
 
+    # 逆大盘方向检测
+    mkt_change = fields.get("market_change_30d", 0) or 0
+    mkt_name = str(fields.get("market_index_name", "大盘"))
+    counter_trend = ""
+    if mkt_change > 3 and signal in ("SELL", "STRONG_SELL"):
+        counter_trend = f"⚠️ 个股空头信号与{mkt_name}趋势（+{mkt_change:.1f}%）背离，信号可靠性降低"
+    elif mkt_change < -3 and signal in ("BUY", "STRONG_BUY"):
+        counter_trend = f"⚠️ 个股多头信号与{mkt_name}趋势（{mkt_change:+.1f}%）背离，信号可靠性降低"
+
     if not holdings:
         # 无持仓 — 直接给一句判断
         if adx < 25:
@@ -710,11 +719,12 @@ def build_operation_summary(fields: dict, holdings: list = None) -> str:
         else:
             suggestion = "信号中性，建议等待更明确方向"
 
+        ct_line = f"\n{counter_trend}" if counter_trend else ""
         return f"""━━━━━━━━━━━━━━━━━━
 📋 操盘摘要
 ━━━━━━━━━━━━━━━━━━
 📭 当前未持有 {symbol}
-💡 {suggestion}
+💡 {suggestion}{ct_line}
 """
 
     # 有持仓 — 匹配当前分析的股票
@@ -722,11 +732,12 @@ def build_operation_summary(fields: dict, holdings: list = None) -> str:
 
     if not matched:
         suggestion = "你未持有该股，参考下方交易方案判断是否建仓"
+        ct_line = f"\n{counter_trend}" if counter_trend else ""
         return f"""━━━━━━━━━━━━━━━━━━
 📋 操盘摘要
 ━━━━━━━━━━━━━━━━━━
 📭 当前未持有 {symbol}
-💡 {suggestion}
+💡 {suggestion}{ct_line}
 """
 
     # 生成每个持仓摘要
@@ -791,6 +802,9 @@ def build_operation_summary(fields: dict, holdings: list = None) -> str:
 
     if not blocks:
         return build_operation_summary(fields, None)  # 回退到无持仓
+
+    if counter_trend:
+        blocks.append(counter_trend)
 
     return f"""━━━━━━━━━━━━━━━━━━
 📋 操盘摘要
@@ -1198,6 +1212,212 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"分析股票失败: {str(e)}")
+
+
+# ==================== V5.26: 多股持仓面板 ====================
+
+@app.get("/stock/portfolio")
+def get_portfolio(holdings: str = ""):
+    """多股持仓面板 — 批量分析持仓，返回一站式面板。
+
+    - **holdings**: 持仓信息，JSON 格式: [{"symbol":"TSLA","shares":10,"cost":420.5,"note":"长线"}]
+    - 返回 formatted_report：结构化的持仓面板，每只股票一行，含盈亏/信号/建议
+    """
+    if not holdings:
+        return {
+            "formatted_report": "请提供持仓信息。格式：[{\"symbol\":\"TSLA\",\"shares\":10,\"cost\":420.5}]"
+        }
+
+    try:
+        holdings_list = json.loads(holdings)
+    except (json.JSONDecodeError, TypeError):
+        return {
+            "formatted_report": "持仓信息 JSON 格式错误，请检查。格式：[{\"symbol\":\"TSLA\",\"shares\":10,\"cost\":420.5}]"
+        }
+
+    if not holdings_list:
+        return {"formatted_report": "持仓为空，请添加至少一只股票。"}
+
+    # 标准化所有代码 + 去重
+    tickers = []
+    meta_map = {}  # sym → {shares, cost, note}
+    for h in holdings_list:
+        raw = str(h.get("symbol", "")).strip().upper()
+        if not raw:
+            continue
+        sym, mkt = normalize_stock_symbol(raw, "us" if not raw.isdigit() else "hk")
+        meta_map[sym] = {
+            "shares": int(h.get("shares", 0)),
+            "cost": float(h.get("cost", 0)),
+            "note": str(h.get("note", "")),
+            "display": raw,
+        }
+        if sym not in tickers:
+            tickers.append(sym)
+
+    if not tickers:
+        return {"formatted_report": "无法解析任何持仓标的。"}
+
+    # 批量下载 + 大盘环境
+    try:
+        raw_data = yf.download(tickers, period="3mo", progress=False, group_by="ticker")
+    except Exception as e:
+        return {"formatted_report": f"数据获取失败：{str(e)}"}
+
+    # 大盘环境
+    mkt_trend = {}
+    try:
+        mkt = get_market_trend("us")
+        mkt_trend["name"] = mkt.get("market_index_name", "标普500")
+        mkt_trend["price"] = mkt.get("market_index_price", 0) or 0
+        mkt_trend["change"] = mkt.get("market_change_30d", 0) or 0
+    except Exception:
+        mkt_trend = {"name": "N/A", "price": 0, "change": 0}
+
+    # 逐股分析
+    rows = []
+    total_cost = 0.0
+    total_value = 0.0
+
+    for sym in tickers:
+        meta = meta_map[sym]
+        shares = meta["shares"]
+        cost = meta["cost"]
+        note = meta["note"]
+        display = meta["display"]
+
+        # 提取该股数据
+        if len(tickers) == 1:
+            stock_data = raw_data.copy()
+        else:
+            try:
+                stock_data = raw_data[sym].copy()
+            except KeyError:
+                rows.append({
+                    "display": display, "sym": sym, "shares": shares,
+                    "cost": cost, "note": note,
+                    "price": 0, "change_pct": 0, "pnl": 0, "pnl_pct": 0,
+                    "signal": "N/A", "adx": 0, "adx_trend": "",
+                    "advice": f"数据获取失败",
+                    "warn": True,
+                })
+                continue
+
+        if stock_data.empty:
+            rows.append({
+                "display": display, "sym": sym, "shares": shares,
+                "cost": cost, "note": note,
+                "price": 0, "change_pct": 0, "pnl": 0, "pnl_pct": 0,
+                "signal": "N/A", "adx": 0, "adx_trend": "",
+                "advice": "无数据",
+                "warn": True,
+            })
+            continue
+
+        current_price = float(stock_data["Close"].iloc[-1])
+        prev_price = float(stock_data["Close"].iloc[-2]) if len(stock_data) > 1 else current_price
+        change_pct = (current_price - prev_price) / prev_price * 100
+
+        pnl = (current_price - cost) * shares if shares > 0 and cost > 0 else 0
+        pnl_pct = (current_price - cost) / cost * 100 if cost > 0 else 0
+
+        # 信号
+        try:
+            sig = get_trading_signal(stock_data, sym)
+            signal = str(sig.get("signal", "NEUTRAL"))
+            adx = sig.get("indicators", {}).get("adx", 0) or 0
+            adx_trend = str(sig.get("indicators", {}).get("adx_trend", ""))
+        except Exception:
+            signal = "NEUTRAL"
+            adx = 0
+            adx_trend = ""
+
+        # 建议
+        warn = False
+        if signal == "STRONG_BUY":
+            advice = "✅ 强买入，持有或加仓"
+        elif signal == "BUY":
+            advice = "✅ 买入信号，继续持有"
+        elif signal == "SELL":
+            advice = "🔴 卖出信号，减仓或清仓"
+            warn = True
+        elif signal == "STRONG_SELL":
+            advice = "🔴 强烈卖出，立即清仓"
+            warn = True
+        elif adx < 25:
+            advice = "⚪ 震荡市，观望"
+        elif pnl_pct < -20:
+            advice = "⚠️ 浮亏>20%，止损"
+            warn = True
+        else:
+            advice = "⚪ 中性，持有观察"
+
+        if cost > 0 and shares > 0:
+            total_cost += cost * shares
+            total_value += current_price * shares
+
+        rows.append({
+            "display": display, "sym": sym, "shares": shares,
+            "cost": cost, "note": note,
+            "price": current_price, "change_pct": change_pct,
+            "pnl": pnl, "pnl_pct": pnl_pct,
+            "signal": signal, "adx": adx, "adx_trend": adx_trend,
+            "advice": advice, "warn": warn,
+        })
+
+    # 渲染面板
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    mkt_line = ""
+    if mkt_trend.get("price"):
+        mkt_line = f"大盘环境：{mkt_trend['name']} {mkt_trend['price']:.2f}（近30日 {mkt_trend['change']:+.1f}%）"
+
+    panel_lines = [
+        f"📊 持仓面板（{now_str}）",
+        mkt_line if mkt_line else "",
+        "",
+        f"{'标的':<8} {'现价':>10} {'成本':>10} {'持仓':>6}  {'盈亏':>14} {'涨跌':>8} {'信号':<12} 建议",
+        "─" * 95,
+    ]
+
+    for r in rows:
+        if r["price"] == 0:
+            panel_lines.append(f"{r['display']:<8} {'—':>10} {'—':>10} {'—':>6}  {'—':>14} {'—':>8} {'—':<12} {r['advice']}")
+            continue
+
+        pnl_str = f"${r['pnl']:+,.0f}（{r['pnl_pct']:+.1f}%）" if r['cost'] > 0 else "—"
+        chg_str = f"{r['change_pct']:+.2f}%"
+        sig_str = f"{r['signal']}（ADX {r['adx']:.1f}）" if r['adx'] else r['signal']
+        prefix = "⚠️ " if r["warn"] else "  "
+
+        panel_lines.append(
+            f"{prefix}{r['display']:<6} {r['price']:>10.2f} {r['cost']:>10.2f} {r['shares']:>4}股 {pnl_str:>14} {chg_str:>8} {sig_str:<12} {r['advice']}"
+        )
+
+    # 汇总行
+    if total_cost > 0:
+        total_pnl = total_value - total_cost
+        total_pnl_pct = total_pnl / total_cost * 100
+        panel_lines.append("─" * 95)
+        panel_lines.append(
+            f"  汇总    {'':>10} {'':>10} {'':>6}  ${total_pnl:+,.0f}（{total_pnl_pct:+.1f}%）"
+        )
+
+    # 逆大盘方向批量检测
+    counter_alerts = []
+    if abs(mkt_trend.get("change", 0)) > 3:
+        for r in rows:
+            if r["signal"] in ("SELL", "STRONG_SELL") and mkt_trend["change"] > 3:
+                counter_alerts.append(f"⚠️ {r['display']} 空头信号 vs {mkt_trend['name']} +{mkt_trend['change']:.1f}%，逆势")
+            elif r["signal"] in ("BUY", "STRONG_BUY") and mkt_trend["change"] < -3:
+                counter_alerts.append(f"⚠️ {r['display']} 多头信号 vs {mkt_trend['name']} {mkt_trend['change']:+.1f}%，逆势")
+
+    if counter_alerts:
+        panel_lines.append("")
+        panel_lines.append("⚠️ 逆大盘方向提醒：")
+        panel_lines.extend(counter_alerts)
+
+    report = "\n".join(panel_lines)
+    return {"formatted_report": report}
 
 
 @app.get("/stock/backtest")

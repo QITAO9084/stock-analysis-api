@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.25.7（修复股票版 rr_a_warning 未定义 + 重复方案C）",
-    "version": "5.26.0"
+    "description": "股票/加密货币分析API - V5.27.0（持仓面板 + 逆大盘方向警告）",
+    "version": "5.27.0"
   },
   "servers": [
     {
@@ -287,6 +287,42 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stock/portfolio": {
+      "get": {
+        "summary": "Portfolio Dashboard",
+        "description": "多股持仓面板 — 批量分析持仓状态。\\n\\n- **holdings**: 持仓信息，JSON 格式: [{\\\"symbol\\\":\\\"TSLA\\\",\\\"shares\\\":10,\\\"cost\\\":420.5}]",
+        "operationId": "get_portfolio_stock_portfolio_get",
+        "parameters": [
+          {
+            "name": "holdings",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Holdings"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "formatted_report": {
+                      "type": "string",
+                      "title": "Formatted Report"
+                    }
+                  }
                 }
               }
             }
