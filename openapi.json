@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Stock Analysis API",
-    "description": "股票/加密货币分析API - V5.25.6（方案B也加盈亏比警告标签）",
-    "version": "5.25.6"
+    "description": "股票/加密货币分析API - V5.25.7（修复股票版 rr_a_warning 未定义 + 重复方案C）",
+    "version": "5.25.7"
   },
   "servers": [
     {
