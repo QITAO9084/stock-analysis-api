@@ -3,7 +3,7 @@
   "info": {
     "title": "Stock Analysis API",
     "description": "股票/加密货币分析API - V5.30.0（修复trade_point与signal方向矛盾导致止损止盈反转）",
-    "version": "5.31.2"
+    "version": "5.31.3"
   },
   "servers": [
     {

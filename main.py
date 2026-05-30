@@ -15,7 +15,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.31.2"
+    version="5.31.3"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1241,10 +1241,20 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
                     result["stop_loss_a"] = round(near_fb * 0.99, 2)
                     result["stop_loss_b"] = round(near_fb * 0.98, 2)
                     result["stop_loss_c"] = round(near_fb * 0.96, 2)
-                result["take_profit_a"] = round(rs * 1.01, 2)
-                result["take_profit_b"] = round(rs * 1.03, 2)
-                result["take_profit_c1"] = round(rs * 1.02, 2)
-                result["take_profit_c2"] = round(rs * 1.05, 2)
+                # V5.31.3: ATR地板+阻力乘数双保险（阻力近时ATR兜底）
+                atr_val = trade_points.get("atr", 0) or 0
+                tp_a_r = round(rs * 1.03, 2)      # 阻力乘数（升至1.03）
+                tp_a_atr = round(current_price + atr_val * 2.5, 2) if atr_val else 0
+                result["take_profit_a"] = max(tp_a_r, tp_a_atr)
+                tp_b_r = round(rs * 1.05, 2)
+                tp_b_atr = round(current_price + atr_val * 3.0, 2) if atr_val else 0
+                result["take_profit_b"] = max(tp_b_r, tp_b_atr)
+                tp_c1_r = round(rs * 1.04, 2)
+                tp_c1_atr = round(current_price + atr_val * 2.5, 2) if atr_val else 0
+                result["take_profit_c1"] = max(tp_c1_r, tp_c1_atr)
+                tp_c2_r = round(rs * 1.07, 2)
+                tp_c2_atr = round(current_price + atr_val * 3.5, 2) if atr_val else 0
+                result["take_profit_c2"] = max(tp_c2_r, tp_c2_atr)
             elif final_trade_point in ("sell", "strong_sell"):
                 result["stop_loss_a"] = round(rs * 1.02, 2)
                 result["take_profit_a"] = round(sp * 0.99, 2)
