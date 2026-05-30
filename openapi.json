@@ -3,7 +3,7 @@
   "info": {
     "title": "Stock Analysis API",
     "description": "股票/加密货币分析API - V5.25.7（修复股票版 rr_a_warning 未定义 + 重复方案C）",
-    "version": "5.25.7"
+    "version": "5.26.0"
   },
   "servers": [
     {
@@ -238,7 +238,7 @@
     "/stock/analyze2": {
       "get": {
         "summary": "Analyze Stock Flat",
-        "description": "扁平化股票分析接口（专为 Coze 插件优化）\n\n所有字段扁平返回，避免嵌套 Object/Array 导致 Coze 解析问题。\nCoze 插件只需配置 String 和 Number 类型的输出参数。\n\n- **symbol**: 股票代码（如 AAPL, 00700.HK）\n- **market**: 市场（us/hk/cn）",
+        "description": "扁平化股票分析接口（专为 Coze 插件优化）\n\n所有字段扁平返回，避免嵌套 Object/Array 导致 Coze 解析问题。\nCoze 插件只需配置 String 和 Number 类型的输出参数。\n\n- **symbol**: 股票代码（如 AAPL, 00700.HK）\n- **market**: 市场（us/hk/cn）\n- **holdings**: 持仓信息（可选），JSON 格式: [{\"symbol\":\"TSLA\",\"shares\":10,\"cost\":420.5}]",
         "operationId": "analyze_stock_flat_stock_analyze2_get",
         "parameters": [
           {
@@ -259,6 +259,16 @@
               "type": "string",
               "default": "us",
               "title": "Market"
+            }
+          },
+          {
+            "name": "holdings",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Holdings"
             }
           }
         ],

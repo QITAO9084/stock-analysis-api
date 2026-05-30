@@ -8,14 +8,14 @@ import json
 import sys
 import os as _os
 
-# V5.20.25: HOLD→NEUTRAL标准化 + 测试矩阵扩展（V5.20.x修复重新应用）
+# V5.26.0: 持仓跟踪 + 操盘摘要（holdings参数 → build_operation_summary）
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
 import threading
 
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.25.7"
+    version="5.26.0"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -681,7 +681,125 @@ def analyze_stock(symbol: str = "AAPL", market: str = "us"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"分析股票失败: {str(e)}")
 
-def build_formatted_report(fields: dict) -> str:
+def build_operation_summary(fields: dict, holdings: list = None) -> str:
+    """生成操盘摘要 — 对标持仓的 actionable 建议。
+
+    holdings 格式: [{"symbol":"TSLA","shares":10,"cost":420.5}, ...]
+    只有 symbol 匹配当前分析的股票时才会展示持仓信息。
+    """
+    symbol = str(fields.get("symbol", "")).upper()
+    current_price = fields.get("current_price", 0) or 0
+    currency = str(fields.get("currency", "USD"))
+    signal = str(fields.get("signal", "NEUTRAL"))
+    trade_point = str(fields.get("trade_point", "hold"))
+    trade_point_cn = str(fields.get("trade_point_cn", "观望"))
+    entry_a = fields.get("entry_a", 0) or 0
+    stop_loss_a = fields.get("stop_loss_a", 0) or 0
+    take_profit_a = fields.get("take_profit_a", 0) or 0
+    adx = fields.get("adx", 0) or 0
+    adx_trend = str(fields.get("adx_trend", ""))
+
+    if not holdings:
+        # 无持仓 — 直接给一句判断
+        if adx < 25:
+            suggestion = "ADX 震荡市，建议观望，不急于动手"
+        elif signal in ("BUY", "STRONG_BUY"):
+            suggestion = f"多头信号，{trade_point_cn}，可考虑建仓（见下方方案）"
+        elif signal in ("SELL", "STRONG_SELL"):
+            suggestion = f"空头信号，{trade_point_cn}，不建议做多"
+        else:
+            suggestion = "信号中性，建议等待更明确方向"
+
+        return f"""━━━━━━━━━━━━━━━━━━
+📋 操盘摘要
+━━━━━━━━━━━━━━━━━━
+📭 当前未持有 {symbol}
+💡 {suggestion}
+"""
+
+    # 有持仓 — 匹配当前分析的股票
+    matched = [h for h in holdings if str(h.get("symbol", "")).upper() == symbol]
+
+    if not matched:
+        suggestion = "你未持有该股，参考下方交易方案判断是否建仓"
+        return f"""━━━━━━━━━━━━━━━━━━
+📋 操盘摘要
+━━━━━━━━━━━━━━━━━━
+📭 当前未持有 {symbol}
+💡 {suggestion}
+"""
+
+    # 生成每个持仓摘要
+    blocks = []
+    for h in matched:
+        shares = int(h.get("shares", 0))
+        cost = float(h.get("cost", 0))
+        note = str(h.get("note", ""))
+
+        if shares <= 0 or cost <= 0:
+            continue
+
+        # 盈亏计算
+        pnl = (current_price - cost) * shares
+        pnl_pct = (current_price - cost) / cost * 100
+        cost_total = cost * shares
+        current_total = current_price * shares
+
+        # 距离方案A止损的距离
+        if stop_loss_a > 0 and current_price > 0:
+            if trade_point in ("buy", "strong_buy"):
+                dist_stop = (current_price - stop_loss_a) / current_price * 100
+                if dist_stop < 0:
+                    stop_line = f"已跌破方案A止损 {currency}{stop_loss_a:.2f}，建议立即止损"
+                else:
+                    stop_line = f"距方案A止损 {currency}{stop_loss_a:.2f} 还有 {dist_stop:.1f}%"
+            elif trade_point in ("sell", "strong_sell"):
+                dist_stop = (stop_loss_a - current_price) / current_price * 100
+                if dist_stop < 0:
+                    stop_line = f"已突破方案A止损 {currency}{stop_loss_a:.2f}，建议立即止损"
+                else:
+                    stop_line = f"距方案A止损 {currency}{stop_loss_a:.2f} 还有 {dist_stop:.1f}%"
+            else:
+                stop_line = "—"
+        else:
+            stop_line = "—"
+
+        # 操作建议
+        if signal == "STRONG_BUY" and pnl_pct > -10:
+            advice = "✅ 强买入信号，可继续持有或加仓"
+        elif signal == "BUY" and pnl_pct > -15:
+            advice = "✅ 买入信号，建议继续持有"
+        elif signal == "SELL":
+            advice = "🔴 卖出信号，建议减仓或清仓"
+        elif signal == "STRONG_SELL":
+            advice = "🔴 强烈卖出，立即清仓"
+        elif adx < 25:
+            advice = "⚪ 震荡市，不建议操作"
+        elif pnl_pct < -20:
+            advice = "⚠️ 浮亏超过20%，无论信号均建议止损"
+        else:
+            advice = "⚪ 信号中性，继续持有观察"
+
+        blocks.append(
+            f"  🔹 {symbol}（{note}）" if note else f"  🔹 {symbol}"
+        )
+        blocks.append(f"    持仓：{shares} 股 × {currency}{cost:.2f} = {currency}{cost_total:,.0f}")
+        blocks.append(f"    现价：{currency}{current_price:.2f}，市值 {currency}{current_total:,.0f}")
+        blocks.append(f"    盈亏：{currency}{pnl:+,.0f}（{pnl_pct:+.1f}%）")
+        blocks.append(f"    {stop_line}")
+        blocks.append(f"    建议：{advice}")
+
+    if not blocks:
+        return build_operation_summary(fields, None)  # 回退到无持仓
+
+    return f"""━━━━━━━━━━━━━━━━━━
+📋 操盘摘要
+━━━━━━━━━━━━━━━━━━
+{chr(10).join(blocks)}
+"""
+
+
+def build_formatted_report(fields: dict, holdings: list = None) -> str:
     """预渲染完整技术分析报告，Agent 直接原样输出。
 
     所有计算逻辑在 API 层完成，Agent 只是一个管道。
@@ -821,12 +939,16 @@ def build_formatted_report(fields: dict) -> str:
     else:
         score_display = f"{trade_score}/100"
 
+    # 操盘摘要（对标持仓）
+    operation_summary = build_operation_summary(fields, holdings)
+
     report = f"""【{fields.get('name', 'N/A')}（{fields.get('symbol', 'N/A')}）技术分析报告】
 生成时间：{fields.get('analysis_time', 'N/A')}
 当前价格：{fields.get('current_price', 0):.2f} {currency}  ({change_pct:+.2f}%)
 ADX趋势强度：{adx:.1f}（{fields.get('adx_trend', 'N/A')}）| 评分：{score_display}
 大盘环境：{mkt_name} {mkt_price:.2f}（近30日 {mkt_change:+.1f}%，{mkt_grade}）
 
+{operation_summary}
 ━━━━━━━━━━━━━━━━━━
 📊 信号诊断
 ━━━━━━━━━━━━━━━━━━
@@ -869,7 +991,7 @@ KDJ：K={fields.get('kdj_k', 0):.1f} D={fields.get('kdj_d', 0):.1f} J={fields.ge
 
 
 @app.get("/stock/analyze2")
-def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
+def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str = ""):
     """
     扁平化股票分析接口（专为 Coze 插件优化）
 
@@ -878,6 +1000,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
 
     - **symbol**: 股票代码（如 AAPL, 00700.HK）
     - **market**: 市场（us/hk/cn）
+    - **holdings**: 持仓信息（可选），JSON 格式: [{"symbol":"TSLA","shares":10,"cost":420.5}]
     """
     if symbol == "auto" or not symbol:
         symbol = "AAPL"
@@ -885,6 +1008,14 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
         market = "us"
 
     symbol, market = normalize_stock_symbol(symbol, market)
+
+    # 解析持仓参数
+    holdings_list = None
+    if holdings:
+        try:
+            holdings_list = json.loads(holdings)
+        except (json.JSONDecodeError, TypeError):
+            holdings_list = None
 
     try:
         info, data = fetch_yf_data(symbol)
@@ -1061,7 +1192,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us"):
                 result["take_profit_c1"] = round(sp * 0.98, 2)
                 result["take_profit_c2"] = round(sp * 0.95, 2)
         # V5.24: API层预渲染完整报告，Agent只需原样输出 formatted_report
-        result["formatted_report"] = build_formatted_report(result)
+        result["formatted_report"] = build_formatted_report(result, holdings_list)
         return result
     except HTTPException:
         raise
