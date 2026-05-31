@@ -33,7 +33,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.13"
+    version="5.33.14"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -205,9 +205,9 @@ def calculate_macd(data):
     sig_prev = signal.iloc[-2] if len(signal) > 1 else sig_now
 
     # 金叉：前一交易日DIF<DEA，今日DIF>=DEA
-    golden_cross = (macd_prev < sig_prev) and (macd_now >= sig_now)
+    golden_cross = bool((macd_prev < sig_prev) and (macd_now >= sig_now))
     # 死叉：前一交易日DIF>DEA，今日DIF<=DEA
-    death_cross = (macd_prev > sig_prev) and (macd_now <= sig_now)
+    death_cross = bool((macd_prev > sig_prev) and (macd_now <= sig_now))
 
     # 柱状图趋势：柱子在放大还是缩小
     hist_now = histogram.iloc[-1]
