@@ -33,7 +33,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.11"
+    version="5.33.12"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1991,40 +1991,22 @@ def _save_portfolio(data: dict):
 
 
 def _get_current_price(symbol: str) -> float:
-    """获取当前价格 — 多层 fallback
+    """获取当前价格 — 复用 fetch_yf_data 的缓存+限速+重试机制
 
-    Railway 上 fast_info 可能返回空/异常，info 比 fast_info 更可靠。
-    V5.33.11: 修复 ticker 作用域 bug — yf.Ticker() 提前到 try 外，避免 NameError。
+    V5.33.12: 不再单独调用 yf.Ticker()，避免与 fetch_yf_data 并行时触发 yfinance 限流。
+    改为复用已有的 fetch_yf_data（含 _rate_limit_wait + 缓存 + 5次重试）。
     """
-    ticker = None
-    # 方法1: yfinance fast_info
     try:
-        ticker = yf.Ticker(symbol)
-        fast_info = ticker.fast_info
-        price = fast_info.get("lastPrice", 0) or fast_info.get("regularMarketPreviousClose", 0)
+        info, data = fetch_yf_data(symbol, period="1d")
+        # 从 info dict 取价格（字段优先级与 /stock/info 端点一致）
+        price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("regularMarketPreviousClose")
         if price and price > 0:
             return float(price)
-    except Exception as e:
-        pass
-
-    # 方法2: yfinance info（比 fast_info 更可靠）
-    try:
-        if ticker is not None:
-            info_obj = ticker.info
-            price = info_obj.get("currentPrice") or info_obj.get("regularMarketPrice") or info_obj.get("regularMarketPreviousClose")
-            if price and price > 0:
-                return float(price)
-    except Exception:
-        pass
-
-    # 方法3: yfinance download 1d
-    try:
-        data = yf.download(symbol, period="1d", progress=False)
-        if not data.empty:
+        # fallback: 从历史数据取最近收盘价
+        if data is not None and not data.empty:
             return float(data["Close"].iloc[-1])
     except Exception:
         pass
-
     return 0
 
 
