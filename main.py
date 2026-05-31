@@ -34,7 +34,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.16"
+    version="5.33.17"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -2228,7 +2228,18 @@ def portfolio_close(req: PortfolioCloseRequest):
     entry = target["entry_price"]
     shares = target["shares"]
     cost = entry * shares
-    exit_val = req.exit_price * shares if req.exit_price > 0 else cost
+
+    # exit_price=0 → 自动获取当前价（复用 fetch_yf_data 限速+缓存）
+    exit_price = req.exit_price
+    if exit_price <= 0:
+        try:
+            exit_price = _get_current_price(target["symbol"])
+        except Exception:
+            pass
+    if exit_price <= 0:
+        exit_price = entry  # 最终 fallback：用入场价
+
+    exit_val = exit_price * shares
     pnl = exit_val - cost
     pnl_pct = (pnl / cost * 100) if cost > 0 else 0
 
@@ -2239,7 +2250,7 @@ def portfolio_close(req: PortfolioCloseRequest):
         "symbol": target["symbol"],
         "display": target.get("display", target["symbol"]),
         "entry_price": entry,
-        "exit_price": req.exit_price,
+        "exit_price": exit_price,
         "shares": shares,
         "pnl": round(pnl, 2),
         "pnl_pct": round(pnl_pct, 2),
@@ -2260,7 +2271,7 @@ def portfolio_close(req: PortfolioCloseRequest):
     icon = "🟢" if is_win else "🔴"
     return {
         "status": "ok",
-        "message": f"{icon} 已平仓：{target['symbol']} {shares}股 出入 ${req.exit_price:.2f} → ${exit_val:,.0f}，盈亏 ${pnl:+,.0f}（{pnl_pct:+.1f}%）",
+        "message": f"{icon} 已平仓：{target['symbol']} {shares}股 入场 ${entry:.2f} → ${exit_price:.2f}，盈亏 ${pnl:+,.0f}（{pnl_pct:+.1f}%）",
         "trade": trade,
     }
 
@@ -2277,7 +2288,7 @@ def portfolio_journal():
     # 绩效统计
     total_trades = len(history)
     wins = [t for t in history if t["pnl"] > 0]
-    losses = [t for t in history if t["pnl"] <= 0]
+    losses = [t for t in history if t["pnl"] < 0]  # 盈亏=0不算亏损，避免统计失真
     win_count = len(wins)
     loss_count = len(losses)
     win_rate = win_count / total_trades * 100 if total_trades > 0 else 0
