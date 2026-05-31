@@ -7,6 +7,24 @@ import time
 import json
 import sys
 import os as _os
+import uuid as _uuid
+from pydantic import BaseModel
+
+class PortfolioOpenRequest(BaseModel):
+    symbol: str
+    entry_price: float = 0
+    shares: int
+    stop_loss: float = 0
+    take_profit: float = 0
+    signal: str = "NEUTRAL"
+    rating: str = "C"
+    score: int = 0
+    note: str = ""
+
+class PortfolioCloseRequest(BaseModel):
+    position_id: str
+    exit_price: float = 0
+    reason: str = ""
 
 # V5.33.0: 持仓跟踪+交易日志复盘（portfolio CRUD + 绩效统计）
 print(f"===== MODULE LOADED: sys.argv={sys.argv}, PORT={_os.environ.get('PORT', 'NOT SET')}, RAILWAY_ENV={_os.environ.get('RAILWAY_ENVIRONMENT', 'NOT SET')} =====", flush=True)
@@ -1990,17 +2008,7 @@ def _get_current_price(symbol: str) -> float:
 
 
 @app.post("/portfolio/open")
-def portfolio_open(
-    symbol: str = "AAPL",
-    entry_price: float = 0,
-    shares: int = 0,
-    stop_loss: float = 0,
-    take_profit: float = 0,
-    signal: str = "NEUTRAL",
-    rating: str = "C",
-    score: int = 0,
-    note: str = "",
-):
+def portfolio_open(req: PortfolioOpenRequest):
     """开仓记录 — 持久化到 portfolio.json
 
     - **symbol**: 股票代码
@@ -2013,10 +2021,10 @@ def portfolio_open(
     - **score**: 入场时的评分（0-100）
     - **note**: 备注
     """
-    if shares <= 0:
+    if req.shares <= 0:
         return {"status": "error", "message": "股数必须 > 0"}
 
-    sym, mkt = normalize_stock_symbol(symbol.strip().upper(), "us")
+    sym, mkt = normalize_stock_symbol(req.symbol.strip().upper(), "us")
     pf = _load_portfolio()
 
     now = datetime.now()
@@ -2025,22 +2033,22 @@ def portfolio_open(
     pos = {
         "id": pos_id,
         "symbol": sym,
-        "display": symbol.strip().upper(),
-        "entry_price": entry_price,
-        "shares": shares,
-        "stop_loss": stop_loss,
-        "take_profit": take_profit,
+        "display": req.symbol.strip().upper(),
+        "entry_price": req.entry_price,
+        "shares": req.shares,
+        "stop_loss": req.stop_loss,
+        "take_profit": req.take_profit,
         "entry_date": now.isoformat(),
-        "signal": signal,
-        "rating": rating,
-        "score": score,
-        "note": note,
+        "signal": req.signal,
+        "rating": req.rating,
+        "score": req.score,
+        "note": req.note,
     }
     pf["positions"].append(pos)
     _save_portfolio(pf)
 
     # 计算初始成本
-    cost = entry_price * shares
+    cost = req.entry_price * req.shares
     return {
         "status": "ok",
         "position_id": pos_id,
@@ -2134,14 +2142,14 @@ def portfolio_status():
 
 
 @app.post("/portfolio/close")
-def portfolio_close(position_id: str = "", exit_price: float = 0, reason: str = "手动平仓"):
+def portfolio_close(req: PortfolioCloseRequest):
     """平仓记录 — 从持仓中移除并写入交易日志
 
     - **position_id**: 持仓ID（由 /portfolio/open 返回）
     - **exit_price**: 出场价格
     - **reason**: 平仓原因（默认：手动平仓）
     """
-    if not position_id:
+    if not req.position_id:
         return {"status": "error", "message": "请提供 position_id"}
 
     pf = _load_portfolio()
@@ -2151,19 +2159,19 @@ def portfolio_close(position_id: str = "", exit_price: float = 0, reason: str = 
     target = None
     remaining = []
     for pos in positions:
-        if pos["id"] == position_id:
+        if pos["id"] == req.position_id:
             target = pos
         else:
             remaining.append(pos)
 
     if not target:
-        return {"status": "error", "message": f"未找到持仓 {position_id}"}
+        return {"status": "error", "message": f"未找到持仓 {req.position_id}"}
 
     # 计算盈亏
     entry = target["entry_price"]
     shares = target["shares"]
     cost = entry * shares
-    exit_val = exit_price * shares if exit_price > 0 else cost
+    exit_val = req.exit_price * shares if req.exit_price > 0 else cost
     pnl = exit_val - cost
     pnl_pct = (pnl / cost * 100) if cost > 0 else 0
 
@@ -2174,7 +2182,7 @@ def portfolio_close(position_id: str = "", exit_price: float = 0, reason: str = 
         "symbol": target["symbol"],
         "display": target.get("display", target["symbol"]),
         "entry_price": entry,
-        "exit_price": exit_price,
+        "exit_price": req.exit_price,
         "shares": shares,
         "pnl": round(pnl, 2),
         "pnl_pct": round(pnl_pct, 2),
@@ -2183,7 +2191,7 @@ def portfolio_close(position_id: str = "", exit_price: float = 0, reason: str = 
         "signal": target.get("signal", "NEUTRAL"),
         "rating": target.get("rating", "C"),
         "score": target.get("score", 0),
-        "reason": reason,
+        "reason": req.reason,
         "days_held": (now.date() - datetime.fromisoformat(target["entry_date"]).date()).days if target.get("entry_date") else 0,
     }
 
@@ -2195,7 +2203,7 @@ def portfolio_close(position_id: str = "", exit_price: float = 0, reason: str = 
     icon = "🟢" if is_win else "🔴"
     return {
         "status": "ok",
-        "message": f"{icon} 已平仓：{target['symbol']} {shares}股 出入 ${exit_price:.2f} → ${exit_val:,.0f}，盈亏 ${pnl:+,.0f}（{pnl_pct:+.1f}%）",
+        "message": f"{icon} 已平仓：{target['symbol']} {shares}股 出入 ${req.exit_price:.2f} → ${exit_val:,.0f}，盈亏 ${pnl:+,.0f}（{pnl_pct:+.1f}%）",
         "trade": trade,
     }
 
