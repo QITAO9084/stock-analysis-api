@@ -551,7 +551,7 @@ def read_root():
     return {
         "status": "ok",
         "message": "Stock Analysis API is running",
-        "version": "1.0.0"
+        "version": version  # 引用全局变量，避免硬编码
     }
 
 @app.get("/health")
