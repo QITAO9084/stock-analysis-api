@@ -33,7 +33,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.0"
+    version="5.33.11"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1994,7 +1994,9 @@ def _get_current_price(symbol: str) -> float:
     """获取当前价格 — 多层 fallback
 
     Railway 上 fast_info 可能返回空/异常，info 比 fast_info 更可靠。
+    V5.33.11: 修复 ticker 作用域 bug — yf.Ticker() 提前到 try 外，避免 NameError。
     """
+    ticker = None
     # 方法1: yfinance fast_info
     try:
         ticker = yf.Ticker(symbol)
@@ -2002,15 +2004,16 @@ def _get_current_price(symbol: str) -> float:
         price = fast_info.get("lastPrice", 0) or fast_info.get("regularMarketPreviousClose", 0)
         if price and price > 0:
             return float(price)
-    except Exception:
+    except Exception as e:
         pass
 
     # 方法2: yfinance info（比 fast_info 更可靠）
     try:
-        info = ticker.info
-        price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("regularMarketPreviousClose")
-        if price and price > 0:
-            return float(price)
+        if ticker is not None:
+            info_obj = ticker.info
+            price = info_obj.get("currentPrice") or info_obj.get("regularMarketPrice") or info_obj.get("regularMarketPreviousClose")
+            if price and price > 0:
+                return float(price)
     except Exception:
         pass
 
