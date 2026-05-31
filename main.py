@@ -2030,14 +2030,31 @@ def portfolio_open(req: PortfolioOpenRequest):
     now = datetime.now()
     pos_id = f"POS-{now.strftime('%Y%m%d%H%M%S')}-{_uuid.uuid4().hex[:4].upper()}"
 
+    # V5.33.6: 自动获取现价
+    entry_price = req.entry_price
+    if entry_price <= 0:
+        try:
+            entry_price = _get_current_price(sym)
+        except Exception:
+            entry_price = 0
+
+    # V5.33.6: 自动设置止损止盈
+    stop_loss = req.stop_loss
+    take_profit = req.take_profit
+    if entry_price > 0:
+        if stop_loss <= 0:
+            stop_loss = round(entry_price * 0.95, 2)   # 默认 -5% 硬止损
+        if take_profit <= 0:
+            take_profit = round(entry_price * 1.15, 2)  # 默认 +15% 止盈
+
     pos = {
         "id": pos_id,
         "symbol": sym,
         "display": req.symbol.strip().upper(),
-        "entry_price": req.entry_price,
+        "entry_price": entry_price,
         "shares": req.shares,
-        "stop_loss": req.stop_loss,
-        "take_profit": req.take_profit,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
         "entry_date": now.isoformat(),
         "signal": req.signal,
         "rating": req.rating,
@@ -2048,11 +2065,11 @@ def portfolio_open(req: PortfolioOpenRequest):
     _save_portfolio(pf)
 
     # 计算初始成本
-    cost = req.entry_price * req.shares
+    cost = entry_price * req.shares
     return {
         "status": "ok",
         "position_id": pos_id,
-        "message": f"✅ 已记录开仓：{sym} {req.shares}股 @ ${req.entry_price:.2f}，成本 ${cost:,.0f}",
+        "message": f"✅ 已记录开仓：{sym} {req.shares}股 @ ${entry_price:.2f}，成本 ${cost:,.0f}",
         "position": pos,
     }
 
