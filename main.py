@@ -33,7 +33,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.12"
+    version="5.33.13"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -58,6 +58,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ===== 优雅降级：500 错误返回详细信息 =====
+from starlette.responses import JSONResponse
+import traceback as _traceback
+
+@app.exception_handler(Exception)
+async def graceful_error_handler(request: Request, exc: Exception):
+    """捕获所有未处理异常，返回详细错误信息（便于调试）"""
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "message": f"Internal Server Error: {type(exc).__name__}: {str(exc)}",
+            "endpoint": str(request.url.path),
+            "traceback": _traceback.format_exc().split('\n')[-8:]  # 最后8行堆栈
+        }
+    )
 
 # ===== yfinance 缓存 + 重试 + 限速机制 =====
 _yf_cache = {}       # {key: {"data": DataFrame, "info": dict, "ts": float}}
