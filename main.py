@@ -2052,7 +2052,7 @@ def portfolio_open(req: PortfolioOpenRequest):
     return {
         "status": "ok",
         "position_id": pos_id,
-        "message": f"✅ 已记录开仓：{sym} {shares}股 @ ${entry_price:.2f}，成本 ${cost:,.0f}",
+        "message": f"✅ 已记录开仓：{sym} {req.shares}股 @ ${req.entry_price:.2f}，成本 ${cost:,.0f}",
         "position": pos,
     }
 
