@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 import time
 import json
+import math
 import sys
 import os as _os
 import uuid as _uuid
@@ -33,7 +34,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.14"
+    version="5.33.15"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -59,14 +60,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ===== 全局 NaN/Inf 清洗：FastAPI 默认 JSONResponse 子类 =====
+from starlette.responses import JSONResponse as _BaseJSONResponse
+
+class CleanJSONResponse(_BaseJSONResponse):
+    """自动清洗响应中的 NaN/Inf 浮点值（转为 JSON null），避免序列化报错"""
+    def render(self, content) -> bytes:
+        def _clean(obj):
+            if isinstance(obj, float):
+                if math.isnan(obj) or math.isinf(obj):
+                    return None
+                return obj
+            elif isinstance(obj, dict):
+                return {k: _clean(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [_clean(v) for v in obj]
+            return obj
+        return super().render(_clean(content))
+
+app.default_response_class = CleanJSONResponse
+
 # ===== 优雅降级：500 错误返回详细信息 =====
-from starlette.responses import JSONResponse
 import traceback as _traceback
 
 @app.exception_handler(Exception)
 async def graceful_error_handler(request: Request, exc: Exception):
     """捕获所有未处理异常，返回详细错误信息（便于调试）"""
-    return JSONResponse(
+    return CleanJSONResponse(
         status_code=500,
         content={
             "status": "error",
