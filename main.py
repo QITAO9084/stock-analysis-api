@@ -1991,20 +1991,38 @@ def _save_portfolio(data: dict):
 
 
 def _get_current_price(symbol: str) -> float:
-    """获取当前价格（15分钟缓存版本）"""
+    """获取当前价格 — 多层 fallback
+
+    Railway 上 fast_info 可能返回空/异常，info 比 fast_info 更可靠。
+    """
+    # 方法1: yfinance fast_info
     try:
-        # 使用 yfinance 快速获取最新价格
         ticker = yf.Ticker(symbol)
         fast_info = ticker.fast_info
         price = fast_info.get("lastPrice", 0) or fast_info.get("regularMarketPreviousClose", 0)
-        if not price or price <= 0:
-            # fallback: download 1d data
-            data = yf.download(symbol, period="1d", progress=False)
-            if not data.empty:
-                price = float(data["Close"].iloc[-1])
-        return float(price) if price else 0
+        if price and price > 0:
+            return float(price)
     except Exception:
-        return 0
+        pass
+
+    # 方法2: yfinance info（比 fast_info 更可靠）
+    try:
+        info = ticker.info
+        price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("regularMarketPreviousClose")
+        if price and price > 0:
+            return float(price)
+    except Exception:
+        pass
+
+    # 方法3: yfinance download 1d
+    try:
+        data = yf.download(symbol, period="1d", progress=False)
+        if not data.empty:
+            return float(data["Close"].iloc[-1])
+    except Exception:
+        pass
+
+    return 0
 
 
 @app.post("/portfolio/open")
@@ -2012,10 +2030,10 @@ def portfolio_open(req: PortfolioOpenRequest):
     """开仓记录 — 持久化到 portfolio.json
 
     - **symbol**: 股票代码
-    - **entry_price**: 入场价
+    - **entry_price**: 入场价（0=自动获取现价）
     - **shares**: 股数
-    - **stop_loss**: 止损价（0=不设止损）
-    - **take_profit**: 止盈价（0=不设止盈）
+    - **stop_loss**: 止损价（0=自动设 -5%）
+    - **take_profit**: 止盈价（0=自动设 +15%）
     - **signal**: 入场时的信号（BUY/SELL/NEUTRAL）
     - **rating**: 入场时的评级（A/B/C/D）
     - **score**: 入场时的评分（0-100）
