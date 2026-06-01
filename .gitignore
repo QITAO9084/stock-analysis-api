@@ -17,3 +17,6 @@ env/
 # Windows reserved names
 nul
 nul.*
+
+# Persistent data (Railway Volume)
+portfolio.json
