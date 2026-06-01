@@ -34,7 +34,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.17"
+    version="5.33.18"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -6868,6 +6868,19 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
         "red_pool_top18": json.dumps(red_pool, ensure_ascii=False),
         "blue_pool_top6": json.dumps(blue_pool, ensure_ascii=False),
     }
+
+
+
+
+# V5.33.18: 清空测试数据（保留持仓）
+@app.post("/portfolio/cleanup")
+def portfolio_cleanup():
+    """清空交易日志（history），保留当前持仓（positions）"""
+    pf = _load_portfolio()
+    removed = len(pf.get("history", []))
+    pf["history"] = []
+    _save_portfolio(pf)
+    return {"status": "ok", "message": f"已清空交易日志，删除 {removed} 条记录，持仓已保留"}
 
 
 if __name__ == "__main__":
