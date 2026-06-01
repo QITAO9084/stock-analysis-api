@@ -2010,7 +2010,7 @@ def get_portfolio(holdings: str = ""):
 import uuid as _uuid
 from pathlib import Path as _Path
 
-_PORTFOLIO_FILE = _Path(__file__).parent / "portfolio.json"
+_PORTFOLIO_FILE = _Path(_os.environ.get("PORTFOLIO_PATH", _Path(__file__).parent / "portfolio.json"))
 
 
 def _load_portfolio() -> dict:
