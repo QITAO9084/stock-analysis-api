@@ -34,7 +34,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.23"
+    version="5.33.24"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -933,12 +933,12 @@ def calculate_signal_rating(fields: dict) -> dict:
     else:
         detail_signal["tp_consistent"] = 0
 
-    # 综合评分归一化 (7分) — V5.33.23 降低阈值，避免大部分股票卡在 0 分
-    if trade_score >= 60:
+    # 综合评分归一化 (7分) — V5.33.24 进一步降低阈值，20分起即给基本分
+    if trade_score >= 50:
         detail_signal["trade_score_grade"] = 7
-    elif trade_score >= 45:
+    elif trade_score >= 35:
         detail_signal["trade_score_grade"] = 5
-    elif trade_score >= 30:
+    elif trade_score >= 20:
         detail_signal["trade_score_grade"] = 3
     else:
         detail_signal["trade_score_grade"] = 0
