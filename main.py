@@ -34,7 +34,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.24"
+    version="5.33.25"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -1798,6 +1798,238 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"分析股票失败: {str(e)}")
+
+
+# ==================== V5.33.25: 批量分析 ====================
+
+def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
+    """内部函数：对单只股票跑完整 analyze2 逻辑，返回紧凑结果。
+    不抛异常，失败时返回 None。
+    """
+    try:
+        info, data = fetch_yf_data(symbol)
+
+        if data.empty:
+            return None
+
+        signal_data = get_trading_signal(data, symbol)
+        trade_points = detect_trade_points(data, symbol)
+        indicators = signal_data["indicators"]
+
+        current_price = round(data['Close'].iloc[-1], 2)
+        prev_close = round(data['Close'].iloc[-2], 2) if len(data) > 1 else current_price
+        change_pct = round((current_price - prev_close) / prev_close * 100, 2) if prev_close != 0 else 0
+
+        # ADX
+        adx_data = calculate_adx(data)
+        adx_val = adx_data["adx"]
+        adx_trend = adx_data["trend"]
+
+        final_signal = signal_data["signal"]
+        if final_signal == "HOLD":
+            final_signal = "NEUTRAL"
+        final_confidence = signal_data["confidence"]
+        final_trade_point = trade_points["trade_point"]
+
+        if adx_val < 25:
+            final_signal = "NEUTRAL"
+            final_confidence = "LOW"
+            final_trade_point = "hold"
+        else:
+            tp = trade_points["trade_point"]
+            orig_signal = signal_data["signal"]
+            if tp == "hold":
+                if orig_signal == "BUY":
+                    final_trade_point = "buy"
+                elif orig_signal == "SELL":
+                    final_trade_point = "sell"
+            elif tp in ("sell", "strong_sell") and orig_signal in ("BUY", "STRONG_BUY"):
+                final_trade_point = "buy"
+            elif tp in ("buy", "strong_buy") and orig_signal in ("SELL", "STRONG_SELL"):
+                final_trade_point = "sell"
+
+        # 信号列表
+        signals_list = list(signal_data["signals"]) if signal_data["signals"] else []
+        rsi_delta_val = round(indicators["rsi_delta"], 2)
+        if abs(rsi_delta_val) > 5:
+            direction = "回落" if rsi_delta_val < 0 else "上升"
+            signals_list.append(f"RSI短期{direction}{abs(rsi_delta_val):.1f}点，动能{'减弱' if rsi_delta_val < 0 else '增强'}")
+
+        # 盈亏比
+        entry_a = trade_points["entry_a"]
+        stop_loss_a = trade_points["stop_loss_a"]
+        take_profit_a = trade_points["take_profit_a"]
+        if entry_a > 0 and stop_loss_a > 0:
+            risk_a = abs(entry_a - stop_loss_a)
+            reward_a = abs(take_profit_a - entry_a) if take_profit_a > 0 else 0
+            rr_a = round(reward_a / risk_a, 1) if risk_a > 0 else 0
+        else:
+            rr_a = 0
+
+        # 构建 result dict
+        result = {
+            "symbol": str(symbol),
+            "name": str(info.get("longName", "N/A")),
+            "current_price": current_price,
+            "change_percent": change_pct,
+            "currency": str(info.get("currency", "USD")),
+            "signal": str(final_signal),
+            "confidence": str(final_confidence),
+            "trade_point": str(final_trade_point),
+            "trade_score": round((trade_points["score"] + 10) * 5 * market_trend["multiplier"]),
+            "base_trade_score": round((trade_points["score"] + 10) * 5),
+            "adx": adx_val,
+            "adx_trend": adx_trend,
+            "rsi": round(indicators["rsi"], 2),
+            "rsi_delta": round(rsi_delta_val, 2),
+            "kdj_k": round(indicators["kdj"]["k"], 2),
+            "kdj_j": round(indicators["kdj"]["j"], 2),
+            "ma20": round(indicators["ma20"], 2),
+            "volume_signal": str(signal_data["volume_signal"]),
+            "support_level": signal_data["support_level"],
+            "resistance_level": signal_data["resistance_level"],
+            "atr": trade_points.get("atr", 0),
+            "entry_a": entry_a,
+            "stop_loss_a": stop_loss_a,
+            "take_profit_a": take_profit_a,
+            # 大盘
+            "market_multiplier": market_trend["multiplier"],
+            "market_grade": market_trend["grade"],
+            "market_index_name": market_trend["name"],
+            "market_index_price": market_trend["index_price"],
+            "market_change_30d": market_trend.get("change_30d", 0),
+            "key_signals_text": "；".join(signals_list[:3]) if signals_list else "无明显信号",
+        }
+
+        # 信号评级 + 仓位
+        rating_data = calculate_signal_rating(result)
+        position_data = calculate_position_sizing(result, rating_data, 6400)
+        result["rating"] = rating_data["rating"]
+        result["rating_label"] = rating_data["rating_label"]
+        result["rating_score"] = rating_data["effective_score"]
+        result["position_pct"] = position_data["suggested_pct"]
+        result["rr_a"] = rr_a
+
+        return result
+    except Exception:
+        return None
+
+
+@app.get("/batch/analyze")
+def batch_analyze(symbols: str = "", market: str = "us"):
+    """
+    V5.33.25: 批量分析接口 — 一次扫多只股票，返回排名汇总表
+
+    对每只股票跑完整 analyze2 逻辑（含信号评级+凯利仓位），
+    按评分排名，输出紧凑汇总表。一次 Coze 工具调用扫 5-6 只。
+
+    - **symbols**: 股票代码，逗号分隔（如 AAPL,MSFT,NVDA,AMD）
+    - **market**: 市场（us/hk/cn），默认美股
+    """
+    if not symbols or symbols.strip() == "":
+        return {"formatted_report": "⚠️ 请提供股票代码，逗号分隔。例如：AAPL,MSFT,NVDA,AMD"}
+
+    if market == "auto" or not market:
+        market = "us"
+
+    symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if len(symbol_list) > 10:
+        symbol_list = symbol_list[:10]
+
+    # 大盘环境（共享）
+    mkt = get_market_trend(market)
+
+    # 逐只分析
+    results = []
+    failed = []
+    for sym in symbol_list:
+        s, m = normalize_stock_symbol(sym, market)
+        r = _batch_analyze_one(s, m, mkt)
+        if r:
+            results.append(r)
+        else:
+            failed.append(sym)
+
+    if not results:
+        return {"formatted_report": "❌ 所有股票分析失败，请检查代码后重试。"}
+
+    # 按评分降序
+    results.sort(key=lambda x: x["rating_score"], reverse=True)
+
+    # ===== 构建格式化报告 =====
+    buy_count = sum(1 for r in results if r["signal"] in ("BUY", "STRONG_BUY"))
+    sell_count = sum(1 for r in results if r["signal"] in ("SELL", "STRONG_SELL"))
+    neutral_count = len(results) - buy_count - sell_count
+
+    lines = []
+    lines.append("")
+    lines.append("【批量分析结果】" + datetime.now().strftime("%Y-%m-%d %H:%M"))
+    market_icon = {"us": "美股", "hk": "港股", "cn": "A股"}.get(market.lower(), market)
+    lines.append(f"市场：{market_icon} | 扫描 {len(symbol_list)} 只 | 有效 {len(results)} 只"
+                 f"{' | 失败 ' + str(len(failed)) + ' 只: ' + ','.join(failed) if failed else ''}")
+    lines.append(f"多头 {buy_count} | 空头 {sell_count} | 中性 {neutral_count}")
+    lines.append(f"大盘环境：{mkt['name']} {mkt['index_price']}（近30日 {mkt.get('change_30d', 0):+.1f}%，"
+                 f"{'强势多头' if mkt['multiplier'] > 1.0 else '偏弱'} → 评分乘数 ×{mkt['multiplier']}）")
+    lines.append("")
+
+    # 表头
+    sep = "━" * 78
+    lines.append(sep)
+    lines.append(f"{'排名':^4}│{'股票':^14}│{'现价':>10}│{'涨跌':>8}│{'信号':^6}│{'评级':^9}│{'评分':>5}│{'ADX':>6}│{'RSI':>5}│{'盈亏比':>6}│{'建议'}")
+    lines.append(sep)
+
+    signal_map = {"BUY": "买入", "STRONG_BUY": "强烈买入", "SELL": "卖出", "STRONG_SELL": "强烈卖出", "NEUTRAL": "观望"}
+
+    for i, r in enumerate(results):
+        rank = f"#{i+1}"
+        name = r["name"][:20] if len(r["name"]) > 20 else r["name"]
+        price = f"{r['current_price']:.2f}"
+        chg = f"{r['change_percent']:+.1f}%" if r['change_percent'] else "0.0%"
+        sig_cn = signal_map.get(r["signal"], r["signal"])
+        rating = f"{r['rating']}级" if len(r['rating']) == 1 else r['rating']
+        score = r["rating_score"]
+        adx_s = f"{r['adx']:.0f}"
+        rsi_s = f"{r['rsi']:.0f}"
+        rr_s = f"1:{r['rr_a']}" if r['rr_a'] and r['rr_a'] > 0 else "N/A"
+        pos_pct = r["position_pct"]
+        pos_str = f"{pos_pct*100:.0f}%仓位" if pos_pct > 0 else "不建议"
+
+        # 颜色标记（文本）
+        icon = ""
+        if r["rating"] == "A":
+            icon = "🟢"
+        elif r["rating"] == "B":
+            icon = "🔵"
+        elif r["rating"] == "C":
+            icon = "🟡"
+        else:
+            icon = "🔴"
+
+        lines.append(f"{rank:^4}│{icon}{name:<12}│{price:>10}│{chg:>8}│{sig_cn:^6}│{rating:^9}│{score:>5}│{adx_s:>6}│{rsi_s:>5}│{rr_s:>6}│{pos_str}")
+
+    lines.append(sep)
+    lines.append("")
+
+    # 详细摘要
+    lines.append("📊 详细摘要：")
+    lines.append("")
+    for i, r in enumerate(results):
+        icon = "🟢" if r["rating"] == "A" else "🔵" if r["rating"] == "B" else "🟡" if r["rating"] == "C" else "🔴"
+        lines.append(f"  #{i+1} {icon} {r['name']}（{r['symbol']}）")
+        lines.append(f"     现价 {r['current_price']:.2f} ({r['change_percent']:+.1f}%) | "
+                     f"信号 {signal_map.get(r['signal'], r['signal'])} | "
+                     f"评级 {r['rating']}级 {r['rating_score']}/100")
+        lines.append(f"     ADX {r['adx']:.0f}（{r['adx_trend']}）| RSI {r['rsi']:.0f} | "
+                     f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
+        if r["key_signals_text"]:
+            lines.append(f"     {r['key_signals_text'][:100]}")
+        if r["position_pct"] > 0:
+            lines.append(f"     💰 建议仓位 {r['position_pct']*100:.0f}% | "
+                         f"入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
+        lines.append("")
+
+    report = "\n".join(lines)
+    return {"formatted_report": report}
 
 
 # ==================== V5.26: 多股持仓面板 ====================
