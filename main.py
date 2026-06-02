@@ -34,7 +34,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.22"
+    version="5.33.23"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -933,12 +933,12 @@ def calculate_signal_rating(fields: dict) -> dict:
     else:
         detail_signal["tp_consistent"] = 0
 
-    # 综合评分归一化 (7分)
-    if trade_score >= 70:
+    # 综合评分归一化 (7分) — V5.33.23 降低阈值，避免大部分股票卡在 0 分
+    if trade_score >= 60:
         detail_signal["trade_score_grade"] = 7
-    elif trade_score >= 55:
+    elif trade_score >= 45:
         detail_signal["trade_score_grade"] = 5
-    elif trade_score >= 40:
+    elif trade_score >= 30:
         detail_signal["trade_score_grade"] = 3
     else:
         detail_signal["trade_score_grade"] = 0
@@ -1420,7 +1420,7 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
         dim_lines.append(f"  {dim_label}：{d['score']}/{d['max']}分")
         if dim_key == "signal_quality":
             for k, v in d["details"].items():
-                dim_lines.append(f"    - {detail_names_signal.get(k, k)}：{v}/10" if k in ("adx_strength", "adx_align") else f"    - {detail_names_signal.get(k, k)}：{v}/8" if k in ("tp_consistent", "trade_score_grade") else f"    - {detail_names_signal.get(k, k)}：{v}")
+                dim_lines.append(f"    - {detail_names_signal.get(k, k)}：{v}/10" if k in ("adx_strength", "adx_align") else f"    - {detail_names_signal.get(k, k)}：{v}/8" if k in ("tp_consistent") else f"    - {detail_names_signal.get(k, k)}：{v}/7" if k in ("trade_score_grade") else f"    - {detail_names_signal.get(k, k)}：{v}")
         elif dim_key == "tech_health":
             for k, v in d["details"].items():
                 dim_lines.append(f"    - {detail_names_tech.get(k, k)}：{v}/8" if k in ("rsi_health", "kdj_health") else f"    - {detail_names_tech.get(k, k)}：{v}/7" if k in ("volume_confirm", "ma20_dev") else f"    - {detail_names_tech.get(k, k)}：{v}")
