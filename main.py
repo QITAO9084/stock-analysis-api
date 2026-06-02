@@ -34,7 +34,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.21"
+    version="5.33.22"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -6886,6 +6886,25 @@ def portfolio_cleanup():
     pf["history"] = []
     _save_portfolio(pf)
     return {"status": "ok", "message": f"已清空交易日志，删除 {removed} 条记录，持仓已保留"}
+
+
+# V5.33.22: 按 symbol 删除指定持仓（不写日志，直接删）
+class PortfolioRemoveRequest(BaseModel):
+    symbol: str
+
+@app.post("/portfolio/remove")
+def portfolio_remove(req: PortfolioRemoveRequest):
+    """删除指定 symbol 的持仓，不写入交易日志"""
+    pf = _load_portfolio()
+    positions = pf.get("positions", [])
+    sym = req.symbol.upper()
+    remaining = [p for p in positions if p.get("symbol", "").upper() != sym]
+    removed = len(positions) - len(remaining)
+    if removed == 0:
+        return {"status": "error", "message": f"未找到 {sym} 持仓"}
+    pf["positions"] = remaining
+    _save_portfolio(pf)
+    return {"status": "ok", "message": f"已删除 {sym} 持仓（{removed} 条），不记入交易日志"}
 
 
 if __name__ == "__main__":
