@@ -34,7 +34,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.20"
+    version="5.33.21"
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
@@ -2010,7 +2010,12 @@ def get_portfolio(holdings: str = ""):
 import uuid as _uuid
 from pathlib import Path as _Path
 
-_PORTFOLIO_FILE = _Path(_os.environ.get("PORTFOLIO_DIR") or _os.environ.get("PORTFOLIO_PATH", _Path(__file__).parent / "portfolio.json"))
+_portfolio_root = _os.environ.get("PORTFOLIO_DIR") or _os.environ.get("PORTFOLIO_PATH")
+if _portfolio_root:
+    _p = _Path(_portfolio_root)
+    _PORTFOLIO_FILE = _p / "portfolio.json" if _p.is_dir() else _p
+else:
+    _PORTFOLIO_FILE = _Path(__file__).parent / "portfolio.json"
 
 
 def _load_portfolio() -> dict:
