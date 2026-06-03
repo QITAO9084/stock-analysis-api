@@ -34,7 +34,8 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.25"
+    version="5.33.26",
+    openapi_version="3.0.3"  # Coze 只支持 3.0.x，FastAPI 默认 3.1.0 不兼容
 )
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
