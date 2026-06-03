@@ -1946,6 +1946,20 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
         result["rating_score"] = rating_data["effective_score"]
         result["position_pct"] = position_data["suggested_pct"]
         result["rr_a"] = rr_a
+# V5.33.28: 信号矛盾修复
+# 1. D级评级 + 非卖出信号 → 强制中性
+if result["rating"] == "D" and result["signal"] not in ("SELL", "STRONG_SELL"):
+    result["signal"] = "NEUTRAL"
+    result["confidence"] = "LOW"
+    result["trade_point"] = "hold"
+    result["position_pct"] = 0
+# 2. ADX空头趋势 + 买入信号 + 非A级 → 强制中性
+adx_trend_lower = str(result.get("adx_trend", "")).lower()
+if "bear" in adx_trend_lower and result["signal"] in ("BUY", "STRONG_BUY"):
+    if result["rating"] != "A":
+        result["signal"] = "NEUTRAL"
+        result["confidence"] = "LOW"
+        result["position_pct"] = 0
 
         return result
     except Exception:
