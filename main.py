@@ -34,9 +34,26 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.26",
-    openapi_version="3.0.3"  # Coze 只支持 3.0.x，FastAPI 默认 3.1.0 不兼容
+    version="5.33.26"
 )
+
+# Coze兼容：强制 OpenAPI 3.0.3（FastAPI 默认 3.1.0 不兼容 Coze）
+from fastapi.openapi.utils import get_openapi
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        openapi_version="3.0.3",
+        description=app.description,
+        routes=app.routes,
+    )
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
 class CozePathRewriteMiddleware(BaseHTTPMiddleware):
