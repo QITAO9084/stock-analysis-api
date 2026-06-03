@@ -59,6 +59,16 @@ def custom_openapi():
                     schema = json_ct.get("schema", {})
                     if not schema or schema == {}:
                         json_ct["schema"] = {"type": "object"}
+    # Coze兼容：递归清理 schema 中的 anyOf/oneOf/allOf（Coze不支持）
+    def _clean_schema(obj):
+        if isinstance(obj, dict):
+            if "anyOf" in obj or "oneOf" in obj or "allOf" in obj:
+                return {"type": "string"}
+            return {k: _clean_schema(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [_clean_schema(v) for v in obj]
+        return obj
+    openapi_schema = _clean_schema(openapi_schema)
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
