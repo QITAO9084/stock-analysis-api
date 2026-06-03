@@ -1916,7 +1916,7 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
 
 
 @app.get("/batch/analyze")
-def batch_analyze(symbols: str = "", market: str = "us"):
+def batch_analyze(symbols: str, market: str = "us"):
     """
     V5.33.25: 批量分析接口 — 一次扫多只股票，返回排名汇总表
 
