@@ -2044,7 +2044,7 @@ def batch_analyze(symbols: str, market: str = "us"):
         rsi_s = f"{r['rsi']:.0f}"
         rr_s = f"1:{r['rr_a']}" if r['rr_a'] and r['rr_a'] > 0 else "N/A"
         pos_pct = r["position_pct"]
-        pos_str = f"{pos_pct*100:.0f}%仓位" if pos_pct > 0 else "不建议"
+        pos_str = f"{pos_pct:.1f}%仓位" if pos_pct > 0 else "不建议"
 
         # 颜色标记（文本）
         icon = ""
@@ -2076,7 +2076,7 @@ def batch_analyze(symbols: str, market: str = "us"):
         if r["key_signals_text"]:
             lines.append(f"     {r['key_signals_text'][:100]}")
         if r["position_pct"] > 0:
-            lines.append(f"     💰 建议仓位 {r['position_pct']*100:.0f}% | "
+            lines.append(f"     💰 建议仓位 {r['position_pct]:.1f}% | "
                          f"入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
         lines.append("")
 
