@@ -2076,7 +2076,7 @@ def batch_analyze(symbols: str, market: str = "us"):
         if r["key_signals_text"]:
             lines.append(f"     {r['key_signals_text'][:100]}")
         if r["position_pct"] > 0:
-            lines.append(f"     💰 建议仓位 {r['position_pct]:.1f}% | "
+            lines.append(f"     💰 建议仓位 {r['position_pct']:.1f}% | "
                          f"入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
         lines.append("")
 
