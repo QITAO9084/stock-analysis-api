@@ -34,10 +34,10 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.26"
+    version="5.33.27"
 )
 
-# Coze兼容：强制 OpenAPI 3.0.3（FastAPI 默认 3.1.0 不兼容 Coze）
+# Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
 from fastapi.openapi.utils import get_openapi
 
 def custom_openapi():
@@ -50,6 +50,15 @@ def custom_openapi():
         description=app.description,
         routes=app.routes,
     )
+    # 给所有没有response schema的端点补上 {"type": "object"}，让Coze能正常导入
+    for path_data in openapi_schema.get("paths", {}).values():
+        for op in path_data.values():
+            if "responses" in op:
+                for resp in op["responses"].values():
+                    json_ct = resp.get("content", {}).get("application/json", {})
+                    schema = json_ct.get("schema", {})
+                    if not schema or schema == {}:
+                        json_ct["schema"] = {"type": "object"}
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
