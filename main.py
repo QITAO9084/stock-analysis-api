@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import time
 import json
@@ -10,6 +10,13 @@ import sys
 import os as _os
 import uuid as _uuid
 from pydantic import BaseModel
+
+# ===== 北京时间辅助函数（Railway服务器UTC，+8小时）=====
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+def beijing_now():
+    """返回北京时间当前时刻"""
+    return datetime.now(BEIJING_TZ)
 
 class PortfolioOpenRequest(BaseModel):
     symbol: str
@@ -35,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.34.1"
+    version="5.34.2"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -582,7 +589,7 @@ def get_trading_signal(data, symbol):
         "support_level": round(recent_low, 2),
         "resistance_level": round(recent_high, 2),
         "trend_direction": "bullish" if (buy_score > sell_score) else ("bearish" if (sell_score > buy_score) else "neutral"),
-        "timestamp": datetime.now().isoformat()
+        "timestamp": beijing_now().isoformat()
     }
 
 @app.get("/")
@@ -628,7 +635,7 @@ def get_stock_info(symbol: str = "AAPL", market: str = "us"):
             "52w_low": info.get("fiftyTwoWeekLow", 0),
             "volume": info.get("volume", 0),
             "currency": info.get("currency", "USD"),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": beijing_now().isoformat()
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取股票信息失败: {str(e)}")
@@ -753,7 +760,7 @@ def analyze_stock(symbol: str = "AAPL", market: str = "us"):
             "change_percent": change_percent,
             "currency": info.get("currency", "USD"),
             "market": market,
-            "analysis_time": datetime.now().isoformat(),
+            "analysis_time": beijing_now().isoformat(),
             "signal": signal_data["signal"],
             "confidence": signal_data["confidence"],
             "key_signals": signal_data["signals"],
@@ -1692,7 +1699,7 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
             "change_percent": change_percent,
             "currency": str(info.get("currency", "USD")),
             "market": str(market),
-            "analysis_time": datetime.now().isoformat(),
+            "analysis_time": beijing_now().isoformat(),
             # 买卖信号（V5.20.24: 使用 ADX 过滤后的 final_* 值）
             "signal": str(final_signal),
             "confidence": str(final_confidence),
@@ -2029,7 +2036,7 @@ def batch_analyze(symbols: str, market: str = "us"):
 
     lines = []
     lines.append("")
-    lines.append("【批量分析结果】" + datetime.now().strftime("%Y-%m-%d %H:%M"))
+    lines.append("【批量分析结果】" + beijing_now().strftime("%Y-%m-%d %H:%M"))
     market_icon = {"us": "美股", "hk": "港股", "cn": "A股"}.get(market.lower(), market)
     lines.append(f"市场：{market_icon} | 扫描 {len(symbol_list)} 只 | 有效 {len(results)} 只"
                  f"{' | 失败 ' + str(len(failed)) + ' 只: ' + ','.join(failed) if failed else ''}")
@@ -2260,7 +2267,7 @@ def get_portfolio(holdings: str = ""):
         })
 
     # 渲染面板
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_str = beijing_now().strftime("%Y-%m-%d %H:%M")
     mkt_line = ""
     if mkt_trend.get("price"):
         mkt_line = f"大盘环境：{mkt_trend['name']} {mkt_trend['price']:.2f}（近30日 {mkt_trend['change']:+.1f}%）"
@@ -2380,7 +2387,7 @@ def portfolio_open(req: PortfolioOpenRequest):
     sym, mkt = normalize_stock_symbol(req.symbol.strip().upper(), "us")
     pf = _load_portfolio()
 
-    now = datetime.now()
+    now = beijing_now()
     pos_id = f"POS-{now.strftime('%Y%m%d%H%M%S')}-{_uuid.uuid4().hex[:4].upper()}"
 
     # V5.33.6: 自动获取现价
@@ -2436,7 +2443,7 @@ def portfolio_status():
     if not positions:
         return {"formatted_report": "📭 当前无持仓。", "positions": [], "summary": {}}
 
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_str = beijing_now().strftime("%Y-%m-%d %H:%M")
     lines = [f"📊 持仓跟踪（{now_str}）", ""]
 
     total_cost = 0.0
@@ -2477,7 +2484,7 @@ def portfolio_status():
             "cost": round(cost, 2),
             "value": round(value, 2),
             "alerts": alerts,
-            "days_held": (datetime.now().date() - datetime.fromisoformat(pos["entry_date"]).date()).days if pos.get("entry_date") else 0,
+            "days_held": (beijing_now().date() - datetime.fromisoformat(pos["entry_date"]).date()).days if pos.get("entry_date") else 0,
         }
         enriched.append(pos_enriched)
 
@@ -2566,7 +2573,7 @@ def portfolio_close(req: PortfolioCloseRequest):
     pnl_pct = (pnl / cost * 100) if cost > 0 else 0
 
     # 写入交易日志
-    now = datetime.now()
+    now = beijing_now()
     trade = {
         "id": f"TRD-{now.strftime('%Y%m%d%H%M%S')}-{_uuid.uuid4().hex[:4].upper()}",
         "symbol": target["symbol"],
@@ -2665,7 +2672,7 @@ def portfolio_journal():
     }
 
     # 渲染报告
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_str = beijing_now().strftime("%Y-%m-%d %H:%M")
     lines = [
         f"📋 交易日志复盘（{now_str}）",
         "",
@@ -2776,7 +2783,7 @@ def backtest(symbol: str = "AAPL", market: str = "us", days: int = 60):
         
         formatted_report = f"""【{symbol} 信号回测报告】
 回测周期：过去 {bt['backtest_days']} 天
-回测时间：{datetime.now().isoformat()}
+回测时间：{beijing_now().isoformat()}
 
 ━━━━━━━━━━━━━━━━━━
 📊 命中率统计
@@ -2854,7 +2861,7 @@ def build_compare_report(results: list, summary: dict, holdings: list = None, mk
             hold_map[nsym] = {"shares": int(h.get("shares", 0)), "cost": float(h.get("cost", 0))}
 
     # 对比汇总表格
-    now_str = analysis_time or datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    now_str = analysis_time or beijing_now().strftime("%Y-%m-%dT%H:%M:%S")
     mkt_line = ""
     if mkt_price:
         mkt_line = f"大盘环境：{mkt_name} {mkt_price:.2f}（近30日 {mkt_change:+.1f}%）"
@@ -3157,7 +3164,7 @@ def compare_stocks(request: Request, symbols: str = "AAPL,MSFT,GOOG", market: st
             summary["best_performer"] = {"symbol": change_sorted[0]["symbol"], "change": change_sorted[0]["change_percent"]}
             summary["worst_performer"] = {"symbol": change_sorted[-1]["symbol"], "change": change_sorted[-1]["change_percent"]}
 
-        analysis_time = datetime.now().isoformat()
+        analysis_time = beijing_now().isoformat()
         formatted_report = build_compare_report(results, summary, holdings_list, mkt_trend, analysis_time)
 
         # V5.29.0: 报告中嵌入 holdings 来源诊断
@@ -3238,7 +3245,7 @@ def analyze_crypto(symbol: str = "BTC-USD"):
             "change_percent": change_percent,
             "currency": "USD",
             "asset_type": "crypto",
-            "analysis_time": datetime.now().isoformat(),
+            "analysis_time": beijing_now().isoformat(),
             # 买卖信号
             "signal": str(signal_data["signal"]),
             "confidence": str(signal_data["confidence"]),
@@ -3374,7 +3381,7 @@ def analyze_forex(pair: str = "USDCNY"):
             "volatility_20d": volatility_20d,
             "is_reversed": yf_symbol in REVERSED_PAIRS,
             "asset_type": "forex",
-            "analysis_time": datetime.now().isoformat(),
+            "analysis_time": beijing_now().isoformat(),
             # 买卖信号
             "signal": str(signal_data["signal"]),
             "confidence": str(signal_data["confidence"]),
@@ -4257,7 +4264,7 @@ def scan_stocks(
             "top_buy": buy_stocks[:3] if buy_stocks else [],
             "top_sell": sell_stocks[:3] if sell_stocks else [],
             "all_signals": results,
-            "scan_time": datetime.now().isoformat(),
+            "scan_time": beijing_now().isoformat(),
             "symbols_scanned": ",".join([s[0] for s in normalized]),
         }
 
@@ -4324,7 +4331,7 @@ def get_trade_point_flat(symbol: str = "AAPL", market: str = "us"):
             "change_percent": change_percent,
             "currency": str(info.get("currency", "USD")),
             "market": str(market),
-            "analysis_time": datetime.now().isoformat(),
+            "analysis_time": beijing_now().isoformat(),
             # 买卖点核心
             "trade_point": str(trade_points["trade_point"]),
             "trade_point_cn": trade_point_cn.get(trade_points["trade_point"], "观望"),
