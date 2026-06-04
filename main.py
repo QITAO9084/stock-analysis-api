@@ -34,7 +34,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.28"
+    version="5.33.29"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -1138,6 +1138,11 @@ def calculate_signal_rating(fields: dict) -> dict:
     for _ in downgrades:
         effective_score = max(effective_score - 5, 0)
 
+    # V5.33.29: 盈亏比<1:1自动降一档（-10分，确保A→B+或B→C+）
+    if rr_a < 1.0 and rr_a > 0 and signal != "NEUTRAL":
+        downgrades.append(f"盈亏比仅1:{rr_a:.1f}，风险收益不匹配，评级自动降一档")
+        effective_score = max(effective_score - 5, 0)  # 额外-5（循环已-5，共-10）
+
     # 盈亏比<0.5 + 非NEUTRAL → 直接D级
     if rr_a < 0.5 and signal != "NEUTRAL" and entry_a > 0:
         exclusions.append(f"盈亏比仅1:{rr_a:.1f}，风险收益严重不匹配")
@@ -1960,6 +1965,9 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
                 result["signal"] = "NEUTRAL"
                 result["confidence"] = "LOW"
                 result["position_pct"] = 0
+            else:
+                # V5.33.29: A级判为左侧交易（逆势操作，需额外谨慎）
+                result["left_side"] = True
 
         return result
     except Exception:
@@ -2022,6 +2030,7 @@ def batch_analyze(symbols: str, market: str = "us"):
     lines.append(f"多头 {buy_count} | 空头 {sell_count} | 中性 {neutral_count}")
     lines.append(f"大盘环境：{mkt['name']} {mkt['index_price']}（近30日 {mkt.get('change_30d', 0):+.1f}%，"
                  f"{'强势多头' if mkt['multiplier'] > 1.0 else '偏弱'} → 评分乘数 ×{mkt['multiplier']}）")
+    lines.append("⏱️ 信号有效期：3~5个交易日（此后需重新评估）")
     lines.append("")
 
     # 表头
@@ -2068,8 +2077,11 @@ def batch_analyze(symbols: str, market: str = "us"):
     for i, r in enumerate(results):
         icon = "🟢" if r["rating"] == "A" else "🔵" if r["rating"] == "B" else "🟡" if r["rating"] == "C" else "🔴"
         lines.append(f"  #{i+1} {icon} {r['name']}（{r['symbol']}）")
+        sig_display = signal_map.get(r["signal"], r["signal"])
+        if r.get("left_side"):
+            sig_display = sig_display + " ⚠️左侧交易（逆势信号，需额外谨慎）"
         lines.append(f"     现价 {r['current_price']:.2f} ({r['change_percent']:+.1f}%) | "
-                     f"信号 {signal_map.get(r['signal'], r['signal'])} | "
+                     f"信号 {sig_display} | "
                      f"评级 {r['rating']}级 {r['rating_score']}/100")
         lines.append(f"     ADX {r['adx']:.0f}（{r['adx_trend']}）| RSI {r['rsi']:.0f} | "
                      f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
