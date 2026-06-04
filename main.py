@@ -42,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.34.3"
+    version="5.34.4"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -1128,7 +1128,7 @@ def calculate_signal_rating(fields: dict) -> dict:
     is_counter_sell = (is_sell_signal and is_bull_adx)
     if is_counter_buy or is_counter_sell:
         downgrades.append(f"逆势交易：ADX={adx:.1f}（{adx_trend}），与{signal}信号方向相反，强烈建议观望")
-        effective_score = min(effective_score, 59)  # 强制压到C级上限（59分）
+        # 标记逆势（在下面effective_score初始化后统一处理）
 
     # ADX<20 震荡 → 降一级
     if adx < 20:
@@ -1154,6 +1154,10 @@ def calculate_signal_rating(fields: dict) -> dict:
     effective_score = total_score
     for _ in downgrades:
         effective_score = max(effective_score - 5, 0)
+
+    # V5.34.3: 逆势交易强制上限59分（C级），在普通降级后执行
+    if is_counter_buy or is_counter_sell:
+        effective_score = min(effective_score, 59)
 
     # V5.33.29: 盈亏比<1:1自动降一档（-10分，确保A→B+或B→C+）
     if rr_a < 1.0 and rr_a > 0 and signal != "NEUTRAL":
