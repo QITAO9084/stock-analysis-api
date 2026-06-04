@@ -42,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.34.2"
+    version="5.34.3"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -1123,6 +1123,13 @@ def calculate_signal_rating(fields: dict) -> dict:
     downgrades = []
     exclusions = []
 
+    # V5.34.3: 逆势交易强制降级（ADX方向与信号相反）
+    is_counter_buy = (is_buy_signal and is_bear_adx)
+    is_counter_sell = (is_sell_signal and is_bull_adx)
+    if is_counter_buy or is_counter_sell:
+        downgrades.append(f"逆势交易：ADX={adx:.1f}（{adx_trend}），与{signal}信号方向相反，强烈建议观望")
+        effective_score = min(effective_score, 59)  # 强制压到C级上限（59分）
+
     # ADX<20 震荡 → 降一级
     if adx < 20:
         downgrades.append(f"ADX={adx:.1f}<20，趋势不明朗")
@@ -1338,7 +1345,7 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
     if adx < 25:
         adx_note = "⚠️ 震荡市，趋势信号可信度低，建议观望或减小仓位"
     elif counter_trend:
-        adx_note = f"⚠️ 逆势操作！ADX 显示{adx_trend}趋势，{signal}信号为逆势交易，风险极高，建议减仓或观望"
+        adx_note = f"🚨 逆势操作！ADX 显示{adx_trend}趋势，{signal}信号为逆势交易，风险极高！建议：若已持仓可持有等待反弹减仓；若未持仓，仅限极轻仓试多（<3%），跌破支撑必须离场"
     else:
         adx_note = "✅ 趋势明确，信号可信度高"
 
@@ -1796,7 +1803,8 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
                     result["stop_loss_a"] = round(near * 0.99, 2)
                     result["stop_loss_b"] = round(near * 0.98, 2)
                     result["stop_loss_c"] = round(near * 0.96, 2)
-                elif ma50_ref and ma50_ref > sp and ma50_ref >= current_price * 0.7:
+                elif ma50_ref and ma50_ref < current_price and ma50_ref >= current_price * 0.7:
+                    # V5.34.3: ma50_ref < current_price 检查 — MA50必须在当前价下方才是支撑
                     result["stop_loss_a"] = round(ma50_ref * 0.99, 2)
                     result["stop_loss_b"] = round(ma50_ref * 0.98, 2)
                     result["stop_loss_c"] = round(ma50_ref * 0.96, 2)
@@ -3610,7 +3618,7 @@ def detect_trade_points(data, symbol):
             else:
                 near_support = recent_low
             sl_base = near_support
-        elif ma50 and ma50 > recent_low and ma50 >= current_price * 0.7:
+        elif ma50 and ma50 < current_price and ma50 >= current_price * 0.7:
             sl_base = ma50
         else:
             sl_base = recent_low
@@ -3626,7 +3634,7 @@ def detect_trade_points(data, symbol):
             else:
                 near_support_a = recent_low
             stop_loss_a = round(near_support_a * 0.99, 2)   # 近端支撑下方1%
-        elif ma50 and ma50 > recent_low and ma50 >= current_price * 0.7:
+        elif ma50 and ma50 < current_price and ma50 >= current_price * 0.7:
             stop_loss_a = round(ma50 * 0.99, 2)       # MA50 下方1%
         else:
             stop_loss_a = round(recent_low * 0.97, 2)
@@ -3641,7 +3649,7 @@ def detect_trade_points(data, symbol):
             else:
                 near_support_b = recent_low
             stop_loss_b = round(near_support_b * 0.98, 2)   # 近端支撑下方2%
-        elif ma50 and ma50 > recent_low and ma50 >= current_price * 0.7:
+        elif ma50 and ma50 < current_price and ma50 >= current_price * 0.7:
             stop_loss_b = round(ma50 * 0.98, 2)       # MA50 下方2%
         else:
             stop_loss_b = round(recent_low * 0.95, 2)
@@ -3999,11 +4007,11 @@ def run_backtest(data, symbol: str, days: int = 60) -> dict:
   止盈位：{take_profit_a:.2f} {currency}（距入场 {tp_a_pct:.1f}%，盈亏比 1:{rr_a:.1f}）
   💡 适用场景：{scenario_a}
 
-【方案B】上调止盈（保守，用远期强阻力）{rr_b_warning}
+【方案B】保守止损（用支撑位下方）{rr_b_warning}
   入场价：{entry_b:.2f} {currency}
-  止损位：{stop_loss_b:.2f} {currency}（距入场 {dist_b_pct:.1f}%，较方案A放宽）
+  止损位：{stop_loss_b:.2f} {currency}（距入场 {dist_b_pct:.1f}%，保守设置）
   止盈位：{take_profit_b:.2f} {currency}（距入场 {tp_b_pct:.1f}%，盈亏比 1:{rr_b:.1f}）
-  💡 适用场景：任何信号下，用远期阻力位/支撑位/ATR目标做保守止盈止损，较方案A放宽约束
+  💡 适用场景：任何信号下，用远期阻力位/支撑位/ATR目标做保守止盈止损
 
 【方案C】分层仓位（动态止损）
   第一批入场：{entry_c1:.2f} {currency}（仓位 40%）
