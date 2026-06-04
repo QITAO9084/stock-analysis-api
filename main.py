@@ -23,7 +23,8 @@ class PortfolioOpenRequest(BaseModel):
     note: str = ""
 
 class PortfolioCloseRequest(BaseModel):
-    position_id: str
+    position_id: str = ""        # V5.34.1: 改为可选，与 symbol 二选一
+    symbol: str = ""             # V5.34.1: 按股票代码平仓（绕过中文reason被WAF拦截）
     exit_price: float = 0
     reason: str = ""
 
@@ -34,7 +35,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.34"
+    version="5.34.1"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -2518,23 +2519,32 @@ def portfolio_close(req: PortfolioCloseRequest):
     - **exit_price**: 出场价格
     - **reason**: 平仓原因（默认：手动平仓）
     """
-    if not req.position_id:
-        return {"status": "error", "message": "请提供 position_id"}
+    # V5.34.1: 支持按 symbol（推荐，避免中文被WAF拦截）或 position_id 平仓
+    if not req.position_id and not req.symbol:
+        return {"status": "error", "message": "请提供 position_id 或 symbol"}
+    # 安全处理 reason，剔除不可打印字符（避免Cloudflare WAF拦截）
+    reason_safe = ''.join(c for c in req.reason if c.isprintable() and ord(c) < 128)[:200]
 
     pf = _load_portfolio()
     positions = pf.get("positions", [])
 
-    # 查找持仓
+    # 查找持仓（优先 symbol，其次 position_id）
     target = None
     remaining = []
     for pos in positions:
-        if pos["id"] == req.position_id:
+        match = False
+        if req.symbol and pos["symbol"].upper() == req.symbol.upper():
+            match = True
+        elif req.position_id and pos["id"] == req.position_id:
+            match = True
+        if match and target is None:  # 取第一个匹配
             target = pos
         else:
             remaining.append(pos)
 
     if not target:
-        return {"status": "error", "message": f"未找到持仓 {req.position_id}"}
+        lookup = req.symbol or req.position_id
+        return {"status": "error", "message": f"未找到持仓 {lookup}"}
 
     # 计算盈亏
     entry = target["entry_price"]
@@ -2571,7 +2581,7 @@ def portfolio_close(req: PortfolioCloseRequest):
         "signal": target.get("signal", "NEUTRAL"),
         "rating": target.get("rating", "C"),
         "score": target.get("score", 0),
-        "reason": req.reason,
+        "reason": reason_safe or "manual close",
         "days_held": (now.date() - datetime.fromisoformat(target["entry_date"]).date()).days if target.get("entry_date") else 0,
     }
 
