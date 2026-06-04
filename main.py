@@ -42,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.34.7"
+    version="5.34.8"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -1304,6 +1304,20 @@ def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: fl
         suggested_pct = min(suggested_pct, COUNTER_TREND_CAP)
         rating_cap = min(rating_cap, COUNTER_TREND_CAP)  # 同步更新显示值
 
+    # V5.34.8: 观望/中性信号仓位硬上限（观望不应给出激进仓位建议）
+    # BA案例：B级69分、weak_bear、观望信号 → 却给15%仓位，矛盾
+    is_neutral = signal in ("NEUTRAL", "HOLD")
+    if is_neutral:
+        if trend_is_bear:
+            NEUTRAL_CAP = 0.03  # 熊市趋势+观望 → 极保守
+        elif trend_is_bull:
+            NEUTRAL_CAP = 0.05  # 牛市趋势+观望 → 可小仓位
+        else:
+            NEUTRAL_CAP = 0.03  # 震荡+观望 → 保守
+        suggested_pct = min(suggested_pct, NEUTRAL_CAP)
+        rating_cap = min(rating_cap, NEUTRAL_CAP)
+        # 观望信号不应用MIN_FLOOR保底（下面 is_neutral 检查会跳过）
+
     if rating == "D":
         suggested_pct = 0
 
@@ -1311,7 +1325,8 @@ def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: fl
     MIN_FLOOR = {"A": 0.05, "B": 0.03, "C": 0, "D": 0}
     floor_pct = MIN_FLOOR.get(rating, 0)
     floor_applied = False
-    if suggested_pct == 0 and floor_pct > 0:
+    # V5.34.8: 观望信号不使用保底仓位
+    if suggested_pct == 0 and floor_pct > 0 and not is_neutral:
         suggested_pct = floor_pct
         floor_applied = True
 
