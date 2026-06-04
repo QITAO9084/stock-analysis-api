@@ -42,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.34.5"
+    version="5.34.6"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -1079,6 +1079,11 @@ def calculate_signal_rating(fields: dict) -> dict:
     else:
         detail_risk["rr_ratio"] = 0
 
+    # V5.34.6: 逆势交易盈亏比扣分（逆势胜率低，盈亏比数值虚高）
+    is_ct = (is_buy_signal and is_bear_adx) or (is_sell_signal and is_bull_adx)
+    if is_ct and detail_risk["rr_ratio"] >= 8:
+        detail_risk["rr_ratio"] = max(detail_risk["rr_ratio"] - 2, 0)
+
     # 止损距离合理度 (10分) - 太近容易触发，太远风险过大
     if entry_a > 0 and stop_loss_a > 0:
         stop_dist_pct = abs(entry_a - stop_loss_a) / entry_a * 100
@@ -1371,6 +1376,14 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
             f"建议：若已持仓可持有等待反弹减仓；若未持仓，仅限极轻仓试多（<3%），"
             f"跌破支撑（{fields.get(chr(39)+chr(39)+chr(39)+"support_level"+chr(39)+chr(39)+chr(39), 0):.2f}）必须离场"
         )
+    elif fields.get('rsi', 0) and fields.get('rsi', 0) < 35:
+        # V5.34.6: RSI钝化风险提示（强趋势下RSI可长期超卖，信号可能二次探底）
+        rsi_val = fields.get('rsi', 0)
+        counter_trend_note = (
+            f"⚠️ RSI钝化风险：RSI={rsi_val:.1f}处于低位，"
+            f"但ADX={adx:.1f}（{adx_trend}）趋势主导下，超卖可延续，"
+            f"RSI可能二次探底，反转信号需等待量价确认"
+        )
     else:
         counter_trend_note = ""
 
@@ -1572,6 +1585,7 @@ __________________________________________________
 置信度(confidence)：{fields.get('confidence', 'N/A')}
 买卖点(trade_point)：{fields.get('trade_point_cn', 'N/A')}
 关键信号：{fields.get('key_signals_text', 'N/A')}
+{counter_trend_note}
 
 ━━━━━━━━━━━━━━━━━━
 🎯 交易方案（三套）
@@ -1707,21 +1721,35 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
             # （如 ^GSPC：KDJ 超买 J=104 → 卖分高，但 ADX 强牛 + 均线多头 → 总评 BUY）
             tp = trade_points["trade_point"]
             orig_signal = signal_data["signal"]
+            is_bear_adx = "bear" in adx_trend.lower() and "bull" not in adx_trend.lower()
+            is_bull_adx = "bull" in adx_trend.lower() and "bear" not in adx_trend.lower()
             if tp == "hold":
                 if orig_signal == "BUY":
                     final_trade_point = "buy"
-                    final_trade_point_cn = f"建议买入（ADX={adx_val}，{adx_trend}）"
+                    if is_bear_adx:
+                        final_trade_point_cn = f"仅限极轻仓试探（逆势，ADX={adx_val}，{adx_trend}）"
+                    else:
+                        final_trade_point_cn = f"建议买入（ADX={adx_val}，{adx_trend}）"
                 elif orig_signal == "SELL":
                     final_trade_point = "sell"
-                    final_trade_point_cn = f"建议卖出（ADX={adx_val}，{adx_trend}）"
+                    if is_bull_adx:
+                        final_trade_point_cn = f"仅限极轻仓（逆势，ADX={adx_val}，{adx_trend}）"
+                    else:
+                        final_trade_point_cn = f"建议卖出（ADX={adx_val}，{adx_trend}）"
             elif tp in ("sell", "strong_sell") and orig_signal in ("BUY", "STRONG_BUY"):
                 # V5.30: detect_trade_points 判卖但总信号是买 → 方向矛盾修正
                 final_trade_point = "buy"
-                final_trade_point_cn = f"建议买入（ADX={adx_val}，{adx_trend}，信号方向修正）"
+                if is_bear_adx:
+                    final_trade_point_cn = f"仅限极轻仓试探（逆势，ADX={adx_val}，{adx_trend}，方向修正）"
+                else:
+                    final_trade_point_cn = f"建议买入（ADX={adx_val}，{adx_trend}，信号方向修正）"
             elif tp in ("buy", "strong_buy") and orig_signal in ("SELL", "STRONG_SELL"):
                 # V5.30: detect_trade_points 判买但总信号是卖 → 方向矛盾修正
                 final_trade_point = "sell"
-                final_trade_point_cn = f"建议卖出（ADX={adx_val}，{adx_trend}，信号方向修正）"
+                if is_bull_adx:
+                    final_trade_point_cn = f"仅限极轻仓（逆势，ADX={adx_val}，{adx_trend}，方向修正）"
+                else:
+                    final_trade_point_cn = f"建议卖出（ADX={adx_val}，{adx_trend}，信号方向修正）"
 
         result = {
             # 基础信息
@@ -1865,6 +1893,18 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
                 result["stop_loss_c"] = round(rs * 1.03, 2)
                 result["take_profit_c1"] = round(sp * 0.98, 2)
                 result["take_profit_c2"] = round(sp * 0.95, 2)
+        # V5.34.6: 逆势交易收紧方案C动态止损（自相矛盾的信号下，动态止损≤5%）
+        is_bear_adx2 = "bear" in adx_trend.lower() and "bull" not in adx_trend.lower()
+        is_bull_adx2 = "bull" in adx_trend.lower() and "bear" not in adx_trend.lower()
+        if is_bear_adx2 and final_trade_point == "buy":
+            tighter_stop = round(current_price * 0.95, 2)
+            if result.get("stop_loss_c", 0) < tighter_stop:
+                result["stop_loss_c"] = tighter_stop
+        elif is_bull_adx2 and final_trade_point == "sell":
+            tighter_stop = round(current_price * 1.05, 2)
+            if result.get("stop_loss_c", 999) > tighter_stop:
+                result["stop_loss_c"] = tighter_stop
+
         # V5.32: 信号评级 + 仓位建议（先算再入 result）
         rating_data = calculate_signal_rating(result)
         position_data = calculate_position_sizing(result, rating_data, total_capital)
