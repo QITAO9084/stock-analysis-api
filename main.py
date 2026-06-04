@@ -42,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.34.6"
+    version="5.34.7"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -1293,6 +1293,17 @@ def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: fl
     # 取最小值
     suggested_pct = min(half_kelly, rating_cap, HARD_CAP, position_by_risk_pct * 1.0 if position_by_risk_pct < 999 else 1.0)
 
+    # V5.34.7: 逆势交易仓位硬上限 3%（与文字建议"极轻仓<3%"一致）
+    adx_trend = str(fields.get("adx_trend", "")).lower()
+    trend_is_bull = "bull" in adx_trend and "bear" not in adx_trend
+    trend_is_bear = "bear" in adx_trend and "bull" not in adx_trend
+    signal_lower = signal.lower()
+    is_counter = ("buy" in signal_lower and trend_is_bear) or ("sell" in signal_lower and trend_is_bull)
+    COUNTER_TREND_CAP = 0.03
+    if is_counter:
+        suggested_pct = min(suggested_pct, COUNTER_TREND_CAP)
+        rating_cap = min(rating_cap, COUNTER_TREND_CAP)  # 同步更新显示值
+
     if rating == "D":
         suggested_pct = 0
 
@@ -1374,7 +1385,7 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
             f"⚠️ 逆势交易权衡：ADX显示{adx_trend}趋势，与{signal}信号方向相反。"
             f"虽多项超卖指标提示反弹可能，但ADX强趋势主导下超卖可延续。"
             f"建议：若已持仓可持有等待反弹减仓；若未持仓，仅限极轻仓试多（<3%），"
-            f"跌破支撑（{fields.get(chr(39)+chr(39)+chr(39)+"support_level"+chr(39)+chr(39)+chr(39), 0):.2f}）必须离场"
+            f"跌破支撑（{fields.get('support_level', 0):.2f}）必须离场"
         )
     elif fields.get('rsi', 0) and fields.get('rsi', 0) < 35:
         # V5.34.6: RSI钝化风险提示（强趋势下RSI可长期超卖，信号可能二次探底）
@@ -1421,7 +1432,9 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
         rr_a = tp_a_val / dist_a if dist_a > 0 else 0
 
     # 方案A适用场景
-    if signal in ("BUY", "STRONG_BUY"):
+    if counter_trend:
+        scenario_a = "⚠️ 仅作参考，当前为逆势交易，不建议使用此方案"
+    elif signal in ("BUY", "STRONG_BUY"):
         scenario_a = "ADX趋势明确（≥25），顺势操作（买入方向）"
     elif signal in ("SELL", "STRONG_SELL"):
         scenario_a = "ADX趋势明确（≥25），顺势操作（卖出方向）"
@@ -4054,7 +4067,9 @@ def run_backtest(data, symbol: str, days: int = 60) -> dict:
         rr_b = tp_b / dist_b if dist_b > 0 else 0
 
         # 方案A适用场景
-        if signal in ("BUY", "STRONG_BUY"):
+        if counter_trend2:
+            scenario_a = "⚠️ 仅作参考，当前为逆势交易，不建议使用此方案"
+        elif signal in ("BUY", "STRONG_BUY"):
             scenario_a = "ADX≥25 强趋势，顺势操作（买入方向）"
         elif signal in ("SELL", "STRONG_SELL"):
             scenario_a = "ADX≥25 强趋势，顺势操作（卖出方向）"
