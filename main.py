@@ -34,7 +34,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.33.29"
+    version="5.34"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -513,9 +513,11 @@ def get_trading_signal(data, symbol):
             sell_signals.append(f"放量下跌（量比{vol_ratio}倍），空头恐慌")
             sell_score += 2
     elif vol_status == "low_volume":
-        # 缩量 = 观望
-        buy_signals.append(f"成交量萎缩（量比{vol_ratio}倍），市场观望情绪浓")
-        # 缩量不加分不扣分，仅提示
+        # V5.34: 缩量 + 方向解读
+        if data['Close'].iloc[-1] > data['Close'].iloc[-2]:
+            buy_signals.append(f"缩量上涨（量比{vol_ratio}倍），追高需谨慎，突破有效性存疑")
+        else:
+            buy_signals.append(f"缩量下跌（量比{vol_ratio}倍），抛压有限，下方空间不大")
 
     # ---- 第二阶段：否决机制 ----
     # RSI极端超买（>85）→ 强制否决买入信号
@@ -1968,6 +1970,9 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
             else:
                 # V5.33.29: A级判为左侧交易（逆势操作，需额外谨慎）
                 result["left_side"] = True
+        # 3. V5.34: ADX强多头 + 卖出信号 → 趋势末端（如 AMD: ADX 41 strong_bull 但动能衰减见顶）
+        if "bull" in adx_trend_lower and result["signal"] in ("SELL", "STRONG_SELL") and result.get("adx", 0) > 30:
+            result["trend_top"] = True
 
         return result
     except Exception:
@@ -2080,6 +2085,8 @@ def batch_analyze(symbols: str, market: str = "us"):
         sig_display = signal_map.get(r["signal"], r["signal"])
         if r.get("left_side"):
             sig_display = sig_display + " ⚠️左侧交易（逆势信号，需额外谨慎）"
+        if r.get("trend_top"):
+            sig_display = sig_display + " ⚠️趋势末端（ADX强但动能衰减，见顶信号）"
         lines.append(f"     现价 {r['current_price']:.2f} ({r['change_percent']:+.1f}%) | "
                      f"信号 {sig_display} | "
                      f"评级 {r['rating']}级 {r['rating_score']}/100")
@@ -2091,6 +2098,10 @@ def batch_analyze(symbols: str, market: str = "us"):
             lines.append(f"     💰 建议仓位 {r['position_pct']:.1f}% | "
                          f"入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
         lines.append("")
+
+    # V5.34: 仓位公式备注
+    lines.append("📐 仓位公式：基准=评分/100×20%，盈亏比<1:1仓位减半，>2:1×1.3，单票上限20%，总仓位≤60%")
+    lines.append("")
 
     report = "\n".join(lines)
     return {"formatted_report": report}
