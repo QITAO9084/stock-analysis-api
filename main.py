@@ -42,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.35.1"
+    version="5.35.2"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -1183,8 +1183,8 @@ def calculate_signal_rating(fields: dict) -> dict:
         downgrades.append(f"盈亏比仅1:{rr_a:.1f}，风险收益不匹配，评级自动降一档")
         effective_score = max(effective_score - 5, 0)  # 额外-5（循环已-5，共-10）
 
-    # 盈亏比<0.5 + 非NEUTRAL → 直接D级
-    if rr_a < 0.5 and signal != "NEUTRAL" and entry_a > 0:
+    # 盈亏比≤0.5 + 非NEUTRAL → 直接D级
+    if rr_a <= 0.5 and signal != "NEUTRAL" and entry_a > 0:
         exclusions.append(f"盈亏比仅1:{rr_a:.1f}，风险收益严重不匹配")
         effective_score = min(effective_score, 40)
 
@@ -2086,6 +2086,11 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
         # 3. V5.34: ADX强多头 + 卖出信号 → 趋势末端（如 AMD: ADX 41 strong_bull 但动能衰减见顶）
         if "bull" in adx_trend_lower and result["signal"] in ("SELL", "STRONG_SELL") and result.get("adx", 0) > 30:
             result["trend_top"] = True
+        # 4. V5.35.2: 盈亏比<1.0 强制中性（JPM: B级71分但盈亏比1:0.5，止损>止盈）
+        if rr_a < 1.0 and rr_a > 0 and result["signal"] not in ("NEUTRAL",):
+            result["signal"] = "NEUTRAL"
+            result["confidence"] = "LOW"
+            result["position_pct"] = 0
 
         return result
     except Exception:
@@ -2206,13 +2211,22 @@ def batch_analyze(symbols: str, market: str = "us"):
         lines.append(f"     ADX {r['adx']:.0f}（{r['adx_trend']}）| RSI {r['rsi']:.0f} | "
                      f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
         if r["key_signals_text"]:
-            # V5.35.0: D/C级风险提示 — 避免文字与评级矛盾
+            # V5.35.2: D/C级风险提示指纹化 — 根据实际RSI和ADX精确措辞
             caveat = ""
+            rsi_val = r.get("rsi", 50)
             if r["rating"] in ("D", "C") and r["signal"] == "NEUTRAL":
                 if "bull" in str(r.get("adx_trend", "")).lower():
-                    caveat = "⚠️ 趋势虽强但RSI偏高/盈亏比差，当前非理想买点，等待回调 — "
+                    if rsi_val > 60:
+                        caveat = "⚠️ 趋势强但RSI偏高+盈亏比差，建议等回调 — "
+                    elif rsi_val < 40:
+                        caveat = "⚠️ 趋势强但RSI偏低+盈亏比差，底部未确认 — "
+                    else:
+                        caveat = "⚠️ 趋势尚可但盈亏比不佳，建议等待 — "
                 elif "bear" in str(r.get("adx_trend", "")).lower():
-                    caveat = "⚠️ 趋势偏空，当前非理想卖点，等待反弹 — "
+                    if rsi_val < 35:
+                        caveat = "⚠️ 趋势偏空+RSI超卖，不宜抄底，等企稳信号 — "
+                    else:
+                        caveat = "⚠️ 趋势偏空，不宜追高，等待方向明朗 — "
             lines.append(f"     {caveat}{r['key_signals_text'][:200]}")
         if r["position_pct"] > 0:
             lines.append(f"     💰 建议仓位 {r['position_pct']:.1f}% | "
