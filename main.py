@@ -125,6 +125,10 @@ class CleanJSONResponse(_BaseJSONResponse):
 
 app.default_response_class = CleanJSONResponse
 
+# V5.34.9: 声明 formatted_report 输出参数，让 Coze 插件能正确解析响应
+class FormattedReportResponse(BaseModel):
+    formatted_report: str
+
 # ===== 优雅降级：500 错误返回详细信息 =====
 import traceback as _traceback
 
@@ -2089,7 +2093,7 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
 
 
 
-@app.get("/batch/analyze")
+@app.get("/batch/analyze", response_model=FormattedReportResponse)
 def batch_analyze(symbols: str, market: str = "us"):
     """
     V5.33.25: 批量分析接口 — 一次扫多只股票，返回排名汇总表
