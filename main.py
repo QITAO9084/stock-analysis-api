@@ -42,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.35.2"
+    version="5.35.3"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -2086,11 +2086,32 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
         # 3. V5.34: ADX强多头 + 卖出信号 → 趋势末端（如 AMD: ADX 41 strong_bull 但动能衰减见顶）
         if "bull" in adx_trend_lower and result["signal"] in ("SELL", "STRONG_SELL") and result.get("adx", 0) > 30:
             result["trend_top"] = True
-        # 4. V5.35.2: 盈亏比<1.0 强制中性（JPM: B级71分但盈亏比1:0.5，止损>止盈）
+        # 4. V5.35.3: 盈亏比<1.0 降评级但不强制中性（JPM案例优化）
+        # 只对有矛盾的情况才强制中性，有明确技术信号时保留信号但降级
         if rr_a < 1.0 and rr_a > 0 and result["signal"] not in ("NEUTRAL",):
-            result["signal"] = "NEUTRAL"
-            result["confidence"] = "LOW"
-            result["position_pct"] = 0
+            # 检查是否有明确的技术信号支持
+            has_strong_tech = False
+            if result["signal"] in ("BUY", "STRONG_BUY"):
+                # 多头信号：检查ADX强趋势+MACD多头+均线多头
+                adx_trend_lower = str(result.get("adx_trend", "")).lower()
+                if ("bull" in adx_trend_lower and result.get("adx", 0) > 25) or \
+                   (result.get("macd_signal") == "bullish" and result.get("ma_trend") == "bullish"):
+                    has_strong_tech = True
+            elif result["signal"] in ("SELL", "STRONG_SELL"):
+                # 空头信号：检查MACD死叉+RSI高位
+                if result.get("macd_signal") == "bearish" and result.get("rsi", 0) > 60:
+                    has_strong_tech = True
+            
+            if has_strong_tech:
+                # 有明确技术信号支持：保留信号但降级+降仓位
+                result["rating_downgraded"] = True
+                result["position_pct"] = min(result.get("position_pct", 0), 0.02)  # 上限2%
+                # 不强制中性，让评分系统处理
+            else:
+                # 无明确技术信号支持：强制中性
+                result["signal"] = "NEUTRAL"
+                result["confidence"] = "LOW"
+                result["position_pct"] = 0
 
         return result
     except Exception:
