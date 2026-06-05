@@ -42,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.35.3"
+    version="5.35.4"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -1229,6 +1229,51 @@ def calculate_signal_rating(fields: dict) -> dict:
     }
 
 
+def build_signal_summary(signal: str, adx_trend: str, rsi: float) -> str:
+    """V5.35.4: 根据信号和趋势生成总结语，避免文字与参考价位矛盾
+    
+    - signal: 交易信号（BUY/SELL/NEUTRAL等）
+    - adx_trend: ADX趋势（strong_bull/weak_bear/ranging等）
+    - rsi: RSI值
+    """
+    adx_lower = str(adx_trend).lower()
+    rsi_val = float(rsi) if rsi else 50
+    
+    # 观望信号
+    if signal in ("NEUTRAL", "HOLD"):
+        if "bear" in adx_lower and "bull" not in adx_lower:
+            # 空头趋势
+            if rsi_val < 35:
+                return "趋势偏空+RSI超卖，不宜抄底，等企稳信号"
+            else:
+                return "趋势偏空，建议等待企稳信号再做多"
+        elif "bull" in adx_lower and "bear" not in adx_lower:
+            # 多头趋势
+            if rsi_val > 60:
+                return "趋势偏多但RSI偏高，建议等回调后再介入"
+            else:
+                return "趋势偏多，但信号不明确，建议等待突破确认"
+        else:
+            # 震荡
+            return "趋势不明，建议观望等待方向选择"
+    
+    # 买入信号
+    elif signal in ("BUY", "STRONG_BUY"):
+        if "bear" in adx_lower and "bull" not in adx_lower:
+            return "⚠️ 逆势买入信号，风险较高，建议轻仓或放弃"
+        else:
+            return "趋势偏多，可考虑介入"
+    
+    # 卖出信号
+    elif signal in ("SELL", "STRONG_SELL"):
+        if "bull" in adx_lower and "bear" not in adx_lower:
+            return "⚠️ 逆势卖出信号，可能过早，建议谨慎"
+        else:
+            return "趋势偏空，建议减仓或止损"
+    
+    return "信号不明，建议谨慎"
+
+
 def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: float = 6400) -> dict:
     """V5.32.1: 凯利公式仓位建议
 
@@ -2056,6 +2101,8 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
             "market_index_price": market_trend["index_price"],
             "market_change_30d": market_trend.get("change_30d", 0),
             "key_signals_text": "；".join(signals_list[:3]) if signals_list else "无明显信号",
+            # V5.35.4: 根据信号和趋势加总结语（避免文字与参考价位矛盾）
+            "signal_summary": build_signal_summary(final_signal, adx_trend, indicators["rsi"]),
         }
 
         # 信号评级 + 仓位
@@ -2249,9 +2296,16 @@ def batch_analyze(symbols: str, market: str = "us"):
                     else:
                         caveat = "⚠️ 趋势偏空，不宜追高，等待方向明朗 — "
             lines.append(f"     {caveat}{r['key_signals_text'][:200]}")
-        if r["position_pct"] > 0:
+            # V5.35.4: 显示信号总结语（避免文字与参考价位矛盾）
+            if r.get("signal_summary"):
+                lines.append(f"     📝 {r['signal_summary']}")
+        # V5.35.4: 观望信号不显示"建议仓位"，改为"可关注"（避免与信号矛盾）
+        if r["position_pct"] > 0 and r["signal"] not in ("NEUTRAL", "HOLD"):
             lines.append(f"     💰 建议仓位 {r['position_pct']:.1f}% | "
                          f"入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
+        elif r["position_pct"] > 0 and r["signal"] in ("NEUTRAL", "HOLD"):
+            # 观望信号：只给参考价位，不明确建议操作
+            lines.append(f"     💡 可关注 | 参考入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
         lines.append("")
 
     # V5.34: 仓位公式备注
