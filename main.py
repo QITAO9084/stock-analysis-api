@@ -42,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.35.0"
+    version="5.35.1"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -2206,7 +2206,14 @@ def batch_analyze(symbols: str, market: str = "us"):
         lines.append(f"     ADX {r['adx']:.0f}（{r['adx_trend']}）| RSI {r['rsi']:.0f} | "
                      f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
         if r["key_signals_text"]:
-            lines.append(f"     {r['key_signals_text'][:100]}")
+            # V5.35.0: D/C级风险提示 — 避免文字与评级矛盾
+            caveat = ""
+            if r["rating"] in ("D", "C") and r["signal"] == "NEUTRAL":
+                if "bull" in str(r.get("adx_trend", "")).lower():
+                    caveat = "⚠️ 趋势虽强但RSI偏高/盈亏比差，当前非理想买点，等待回调 — "
+                elif "bear" in str(r.get("adx_trend", "")).lower():
+                    caveat = "⚠️ 趋势偏空，当前非理想卖点，等待反弹 — "
+            lines.append(f"     {caveat}{r['key_signals_text'][:200]}")
         if r["position_pct"] > 0:
             lines.append(f"     💰 建议仓位 {r['position_pct']:.1f}% | "
                          f"入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
