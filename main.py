@@ -42,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.34.8"
+    version="5.34.9"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -405,7 +405,7 @@ def get_trading_signal(data, symbol):
         buy_signals.append(f"RSI超卖（{round(rsi,1)}），可能反弹")
         buy_score += 2
     elif rsi < 45:
-        buy_signals.append(f"RSI偏低（{round(rsi,1)}），可考虑建仓")
+        buy_signals.append(f"RSI偏低（{round(rsi,1)}），已入低位区域")
         buy_score += 1
 
     # RSI趋势加分：超买但正在回落（比单纯超买更温和）
@@ -416,7 +416,7 @@ def get_trading_signal(data, symbol):
         sell_signals.append(f"RSI超买（{round(rsi,1)}），注意风险")
         sell_score += 1
     elif rsi > 60:
-        sell_signals.append(f"RSI偏高（{round(rsi,1)}），可考虑减仓")
+        sell_signals.append(f"RSI偏高（{round(rsi,1)}），已入高位区域")
         sell_score += 1
 
     # RSI从超卖回升 = 强买入信号
