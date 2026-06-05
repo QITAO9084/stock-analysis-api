@@ -2111,8 +2111,8 @@ def batch_analyze(symbols: str, market: str = "us"):
         market = "us"
 
     symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    if len(symbol_list) > 10:
-        symbol_list = symbol_list[:10]
+    if len(symbol_list) > 15:
+        symbol_list = symbol_list[:15]
 
     # 大盘环境（共享）
     mkt = get_market_trend(market)
