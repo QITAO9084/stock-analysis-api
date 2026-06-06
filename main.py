@@ -42,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.35.5"
+    version="5.35.6"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -1183,13 +1183,13 @@ def calculate_signal_rating(fields: dict) -> dict:
         downgrades.append(f"盈亏比仅1:{rr_a:.1f}，风险收益不匹配，评级自动降一档")
         effective_score = max(effective_score - 5, 0)  # 额外-5（循环已-5，共-10）
 
-    # 盈亏比≤0.5 + 非NEUTRAL → 直接D级
-    if rr_a <= 0.5 and signal != "NEUTRAL" and entry_a > 0:
+    # 盈亏比≤0.5 → 直接D级（无论什么信号）
+    if rr_a <= 0.5 and rr_a > 0 and entry_a > 0:
         exclusions.append(f"盈亏比仅1:{rr_a:.1f}，风险收益严重不匹配")
         effective_score = min(effective_score, 40)
 
-    # V5.35.5: 盈亏比<1.0（但>0.5）强制上限59分（C级），防止只罚5分还是B级
-    if rr_a < 1.0 and rr_a > 0.5 and signal != "NEUTRAL":
+    # V5.35.6: 盈亏比<1.0（但>0.5）强制上限59分（C级），NEUTRAL也适用
+    if rr_a < 1.0 and rr_a > 0.5:
         effective_score = min(effective_score, 59)
 
     # ADX<20 震荡市 + NEUTRAL → 直接D级
