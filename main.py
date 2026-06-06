@@ -28,6 +28,7 @@ class PortfolioOpenRequest(BaseModel):
     rating: str = "C"
     score: int = 0
     note: str = ""
+    direction: str = "LONG"   # V5.36.0: 做多/做空方向
 
 class PortfolioCloseRequest(BaseModel):
     position_id: str = ""        # V5.34.1: 改为可选，与 symbol 二选一
@@ -42,7 +43,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.35.7"
+    version="5.36.0"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -1278,13 +1279,15 @@ def build_signal_summary(signal: str, adx_trend: str, rsi: float) -> str:
     return "信号不明，建议谨慎"
 
 
-def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: float = 6400) -> dict:
+def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: float = 6400, direction: str = "LONG") -> dict:
     """V5.32.1: 凯利公式仓位建议
 
     f* = (p*b - q) / b  ->  Half-Kelly ->  rating_cap ->  risk_cap
 
     - total_capital: 总资金（默认 $6,400 ~ 5万HKD）
-    - V5.32.1 修复：SELL信号禁止买入建仓；BUY+B级以上Kelly=0时保底仓位
+    - direction: "LONG"（做多）或 "SHORT"（做空）
+    - V5.32.1 修复：SELL信号禁止买入建仓；BUY信号禁止做空建仓
+    - V5.36.0: 支持做空方向仓位计算
     """
     rating = rating_data["rating"]
     rr_a = rating_data.get("rr_a", 0)
@@ -1293,10 +1296,14 @@ def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: fl
     current_price = fields.get("current_price", 0) or 0
     currency = str(fields.get("currency", "USD"))
     signal = str(fields.get("signal", "NEUTRAL"))
+    direction = str(direction).upper()
 
-    # V5.32.1 修复1: SELL/STRONG_SELL 信号不建买入仓位
-    is_sell = signal in ("SELL", "STRONG_SELL")
-    if is_sell:
+    # V5.36.0: 方向检查和仓位计算
+    is_long = direction == "LONG"
+    is_short = direction == "SHORT"
+    
+    # 做多方向：SELL/STRONG_SELL 信号不建仓
+    if is_long and signal in ("SELL", "STRONG_SELL"):
         return {
             "suggested_pct": 0,
             "position_amount": 0,
@@ -1312,36 +1319,69 @@ def calculate_position_sizing(fields: dict, rating_data: dict, total_capital: fl
             "reason": "卖出信号，不建议买入建仓",
             "floor_applied": False,
         }
+    
+    # 做空方向：BUY/STRONG_BUY 信号不建仓
+    if is_short and signal in ("BUY", "STRONG_BUY"):
+        return {
+            "suggested_pct": 0,
+            "position_amount": 0,
+            "shares": 0,
+            "max_loss": 0,
+            "max_loss_pct": 0,
+            "kelly_raw": 0,
+            "half_kelly": 0,
+            "rating_cap": 0,
+            "risk_cap": "inf",
+            "total_capital": total_capital,
+            "currency": currency,
+            "reason": "买入信号，不建议做空建仓",
+            "floor_applied": False,
+        }
 
     # 胜率估计（基于评级）
     win_probs = {"A": 0.60, "B": 0.50, "C": 0.40, "D": 0.30}
     p = win_probs.get(rating, 0.40)
     q = 1 - p
 
-    # 凯利公式
-    if rr_a > 0 and p > 0:
-        kelly = (p * rr_a - q) / rr_a
+    # ===== 做多/做空方向凯利公式 + 仓位上限 =====
+    if is_short:
+        # V5.36.0: 做空方向凯利公式（简化：直接使用做多的凯利公式，但乘以 0.5 折扣因子）
+        if rr_a > 0 and p > 0:
+            kelly = (p * rr_a - q) / rr_a * 0.5  # 做空折扣因子
+        else:
+            kelly = 0
+        half_kelly = max(kelly / 2, 0)
+        # 做空仓位上限更保守
+        rating_caps = {"A": 0.05, "B": 0.03, "C": 0.02, "D": 0}
+        rating_cap = rating_caps.get(rating, 0.02)
+        HARD_CAP = 0.05  # 做空硬上限 5%
+        # 做空风险约束更严格：单笔亏损 <= 总资金 1%
+        if entry_a > 0 and stop_loss_a > 0 and current_price > 0:
+            dist_per_share = abs(entry_a - stop_loss_a)  # 做空亏损距离
+            max_shares_by_risk = int((total_capital * 0.01) / dist_per_share) if dist_per_share > 0 else 0
+            position_by_risk_pct = (max_shares_by_risk * current_price) / total_capital if total_capital > 0 else 0
+        else:
+            max_shares_by_risk = 0
+            position_by_risk_pct = 999
     else:
-        kelly = 0
-
-    # Half-Kelly 折半（保守）
-    half_kelly = max(kelly / 2, 0)
-
-    # 评级仓位上限
-    rating_caps = {"A": 0.20, "B": 0.15, "C": 0.10, "D": 0}
-    rating_cap = rating_caps.get(rating, 0.10)
-
-    # 硬上限 25%
-    HARD_CAP = 0.25
-
-    # 风险约束：单笔亏损 <= 总资金 2%
-    if entry_a > 0 and stop_loss_a > 0 and current_price > 0:
-        dist_per_share = abs(entry_a - stop_loss_a)
-        max_shares_by_risk = int((total_capital * 0.02) / dist_per_share) if dist_per_share > 0 else 0
-        position_by_risk_pct = (max_shares_by_risk * current_price) / total_capital if total_capital > 0 else 0
-    else:
-        max_shares_by_risk = 0
-        position_by_risk_pct = 999
+        # 做多凯利公式（原有逻辑）
+        if rr_a > 0 and p > 0:
+            kelly = (p * rr_a - q) / rr_a
+        else:
+            kelly = 0
+        half_kelly = max(kelly / 2, 0)
+        # 评级仓位上限（原有逻辑）
+        rating_caps = {"A": 0.20, "B": 0.15, "C": 0.10, "D": 0}
+        rating_cap = rating_caps.get(rating, 0.10)
+        HARD_CAP = 0.25  # 做多硬上限 25%
+        # 做多风险约束：单笔亏损 <= 总资金 2%（原有逻辑）
+        if entry_a > 0 and stop_loss_a > 0 and current_price > 0:
+            dist_per_share = abs(entry_a - stop_loss_a)
+            max_shares_by_risk = int((total_capital * 0.02) / dist_per_share) if dist_per_share > 0 else 0
+            position_by_risk_pct = (max_shares_by_risk * current_price) / total_capital if total_capital > 0 else 0
+        else:
+            max_shares_by_risk = 0
+            position_by_risk_pct = 999
 
     # 取最小值
     suggested_pct = min(half_kelly, rating_cap, HARD_CAP, position_by_risk_pct * 1.0 if position_by_risk_pct < 999 else 1.0)
@@ -1551,11 +1591,18 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
   第二批止盈：{take_profit_c2:.2f} {currency}
   💡 适用场景：价格处于关键支撑/阻力附近，不确定突破方向"""
 
+    # V5.36.0: 根据信号类型判断做多/做空方向
+    sig_dir = str(fields.get("signal", "NEUTRAL")).upper()
+    direction = "SHORT" if sig_dir in ("SELL", "STRONG_SELL") else "LONG"
+    is_short = direction == "SHORT"
+
     # 仓位计算引擎
     # V5.32.2: SELL信号隐藏仓位管理表（避免"建议买入"的误导）
     is_sell_signal = signal in ("SELL", "STRONG_SELL")
+    # V5.36.0: 做多方向显示买入仓位；做空方向显示做空仓位
+    show_position = (not is_short and not is_sell_signal) or (is_short and is_sell_signal)
     position_text = ""
-    if not is_sell_signal and adx >= 25 and rr_a >= 1.0 and entry_a > 0:
+    if show_position and adx >= 25 and rr_a >= 1.0 and entry_a > 0:
         atr = fields.get("atr", 0) or 0
         if atr > 0 and dist_a > 0:
             accounts = [5000, 10000, 25000, 50000, 100000]
@@ -1566,7 +1613,7 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
                 pos_lines.append(f"  ${acc/1000:.0f}K 账户：{shares} 股（风险 {currency}{risk_amount:.0f}）")
             position_text = f"""
 ━━━━━━━━━━━━━━━━━━
-💰 仓位管理（单笔风险≤2%，基于方案A止损 {dist_a:.2f} {currency}，仅供做多参考）
+💰 仓位管理（单笔风险≤2%，基于方案A止损 {dist_a:.2f} {currency}，仅供" + ("做空参考" if is_short else "做多参考") + "）
 ━━━━━━━━━━━━━━━━━━
 """ + "\n".join(pos_lines) + f"\n  ATR(14)：{atr:.2f} {currency}"
 
@@ -1583,7 +1630,15 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
 
     # V5.32: 信号评级 + 仓位建议
     rating_data = calculate_signal_rating(fields)
-    position_data = calculate_position_sizing(fields, rating_data, total_capital)
+    
+    # V5.36.0: 根据信号类型选择做多/做空方向
+    sig = str(fields.get("signal", "NEUTRAL")).upper()
+    if sig in ("SELL", "STRONG_SELL"):
+        direction = "SHORT"
+    else:
+        direction = "LONG"
+    
+    position_data = calculate_position_sizing(fields, rating_data, total_capital, direction=direction)
 
     # 构建评级明细块
     dims = rating_data["dimensions"]
@@ -1988,7 +2043,15 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
 
         # V5.32: 信号评级 + 仓位建议（先算再入 result）
         rating_data = calculate_signal_rating(result)
-        position_data = calculate_position_sizing(result, rating_data, total_capital)
+        
+        # V5.36.0: 根据信号类型选择做多/做空方向
+        sig = str(result.get("signal", "NEUTRAL")).upper()
+        if sig in ("SELL", "STRONG_SELL"):
+            direction = "SHORT"
+        else:
+            direction = "LONG"
+        
+        position_data = calculate_position_sizing(result, rating_data, total_capital, direction=direction)
         result["signal_rating"] = rating_data["rating"]
         result["signal_rating_label"] = rating_data["rating_label"]
         result["signal_rating_score"] = rating_data["effective_score"]
@@ -2111,7 +2174,15 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
 
         # 信号评级 + 仓位
         rating_data = calculate_signal_rating(result)
-        position_data = calculate_position_sizing(result, rating_data, 6400)
+        
+        # V5.36.0: 根据信号类型选择做多/做空方向
+        sig = str(result.get("signal", "NEUTRAL")).upper()
+        if sig in ("SELL", "STRONG_SELL"):
+            direction = "SHORT"
+        else:
+            direction = "LONG"
+        
+        position_data = calculate_position_sizing(result, rating_data, 6400, direction=direction)
         result["rating"] = rating_data["rating"]
         result["rating_label"] = rating_data["rating_label"]
         result["rating_score"] = rating_data["effective_score"]
@@ -2632,6 +2703,7 @@ def portfolio_open(req: PortfolioOpenRequest):
         "rating": req.rating,
         "score": req.score,
         "note": req.note,
+        "direction": req.direction,  # V5.36.0: 做多/做空方向
     }
     pf["positions"].append(pos)
     _save_portfolio(pf)
@@ -2669,12 +2741,19 @@ def portfolio_status():
         sl = pos.get("stop_loss", 0)
         tp = pos.get("take_profit", 0)
         entry_date = pos.get("entry_date", "")[:10]
+        direction = pos.get("direction", "LONG")  # V5.36.0: 做多/做空方向
+        is_short = direction == "SHORT"
 
         # 获取现价
         current = _get_current_price(sym)
         cost = entry * shares
         value = current * shares if current > 0 else cost
-        pnl = value - cost
+
+        # V5.36.0: 做多/做空浮盈公式不同
+        if direction == "SHORT":
+            pnl = (entry - current) * shares  # 做空：平仓盈利 = (开仓价 - 平仓价) * 股数
+        else:
+            pnl = (current - entry) * shares  # 做多：持仓盈利 = (现价 - 开仓价) * 股数
         pnl_pct = (pnl / cost * 100) if cost > 0 else 0
 
         total_cost += cost
@@ -2707,8 +2786,10 @@ def portfolio_status():
             chg_str = f"${current:,.2f}"
 
         alert_str = " ⚠️" + " ".join(alerts) if alerts else ""
+        direction_label = "[做空] " if is_short else ""
+        entry_label = "开空价" if is_short else "成本"
         entry_str = f"${entry:,.2f}"
-        lines.append(f"  {sym:<8} 现价 {chg_str:>10}  成本 {entry_str:>10}  {shares:>4}股  {pnl_str:>16}  持仓{pos_enriched['days_held']}天{alert_str}")
+        lines.append(f"  {sym:<8} 现价 {chg_str:>10}  {entry_label} {entry_str:>10}  {shares:>4}股  {pnl_str:>16}  {direction_label}持仓{pos_enriched['days_held']}天{alert_str}")
 
     # 汇总
     total_pnl = total_value - total_cost
@@ -2769,6 +2850,8 @@ def portfolio_close(req: PortfolioCloseRequest):
     entry = target["entry_price"]
     shares = target["shares"]
     cost = entry * shares
+    direction = target.get("direction", "LONG").upper()
+    is_short = direction == "SHORT"
 
     # exit_price=0 → 自动获取当前价（复用 fetch_yf_data 限速+缓存）
     exit_price = req.exit_price
@@ -2781,7 +2864,8 @@ def portfolio_close(req: PortfolioCloseRequest):
         exit_price = entry  # 最终 fallback：用入场价
 
     exit_val = exit_price * shares
-    pnl = exit_val - cost
+    # V5.36.0: 空仓盈亏 = (开空价 - 平仓价) * 股数
+    pnl = (cost - exit_val) if is_short else (exit_val - cost)
     pnl_pct = (pnl / cost * 100) if cost > 0 else 0
 
     # 写入交易日志
@@ -2810,9 +2894,12 @@ def portfolio_close(req: PortfolioCloseRequest):
 
     is_win = pnl > 0
     icon = "🟢" if is_win else "🔴"
+    # V5.36.0: 空仓平仓文案
+    direction_text = "已平空仓" if is_short else "已平仓"
+    entry_text = "开空价" if is_short else "入场价"
     return {
         "status": "ok",
-        "message": f"{icon} 已平仓：{target['symbol']} {shares}股 入场 ${entry:.2f} → ${exit_price:.2f}，盈亏 ${pnl:+,.0f}（{pnl_pct:+.1f}%）",
+        "message": f"{icon} {direction_text}：{target['symbol']} {shares}股 {entry_text} ${entry:.2f} → ${exit_price:.2f}，盈亏 ${pnl:+,.0f}（{pnl_pct:+.1f}%）",
         "trade": trade,
     }
 
