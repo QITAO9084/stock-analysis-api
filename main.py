@@ -42,7 +42,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.35.4"
+    version="5.35.5"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -1188,6 +1188,10 @@ def calculate_signal_rating(fields: dict) -> dict:
         exclusions.append(f"盈亏比仅1:{rr_a:.1f}，风险收益严重不匹配")
         effective_score = min(effective_score, 40)
 
+    # V5.35.5: 盈亏比<1.0（但>0.5）强制上限59分（C级），防止只罚5分还是B级
+    if rr_a < 1.0 and rr_a > 0.5 and signal != "NEUTRAL":
+        effective_score = min(effective_score, 59)
+
     # ADX<20 震荡市 + NEUTRAL → 直接D级
     if adx < 20 and signal == "NEUTRAL":
         exclusions.append("震荡市+无明确信号，不建议任何操作")
@@ -2105,8 +2109,8 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
             "market_index_price": market_trend["index_price"],
             "market_change_30d": market_trend.get("change_30d", 0),
             "key_signals_text": "；".join(signals_list[:3]) if signals_list else "无明显信号",
-            # V5.35.4: 根据信号和趋势加总结语（避免文字与参考价位矛盾）
-            "signal_summary": build_signal_summary(final_signal, adx_trend, indicators["rsi"]),
+            # V5.35.5: signal_summary 在下面重新计算（确保与最终 signal 一致）
+            "signal_summary": "",
         }
 
         # 信号评级 + 仓位
@@ -2163,6 +2167,13 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
                 result["signal"] = "NEUTRAL"
                 result["confidence"] = "LOW"
                 result["position_pct"] = 0
+
+        # V5.35.5: 重新计算 signal_summary，确保与最终 signal 一致
+        result["signal_summary"] = build_signal_summary(
+            result["signal"],
+            result.get("adx_trend", ""),
+            result.get("rsi", 50)
+        )
 
         return result
     except Exception:
