@@ -1193,6 +1193,10 @@ def calculate_signal_rating(fields: dict) -> dict:
         exclusions.append("震荡市+无明确信号，不建议任何操作")
 
     # ===== 评级映射 =====
+    # V5.35.5: NEUTRAL信号最高C级（≤59分），观望不应该给A/B级
+    if signal == "NEUTRAL":
+        effective_score = min(effective_score, 59)
+
     if effective_score >= 80:
         rating = "A"
         rating_label = "A级 -- 优质信号"
