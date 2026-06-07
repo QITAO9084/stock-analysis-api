@@ -1282,10 +1282,18 @@ def calculate_signal_rating(fields: dict) -> dict:
         downgrades.append(f"盈亏比仅1:{rr_a:.1f}，风险收益不匹配，评级自动降一档")
         effective_score = max(effective_score - 5, 0)  # 额外-5（循环已-5，共-10）
 
-    # V5.35.7: 盈亏比<1.0 → 强制D级（40分），止损>止盈的不值得交易
+    # V2.2.0: 盈亏比<1.0 → 按RR梯度封顶（避免D级全40分无区分度）
+    # RR越接近1.0越接近C级，RR越低惩罚越重
     if rr_a < 1.0 and rr_a > 0 and entry_a > 0:
         exclusions.append(f"盈亏比仅1:{rr_a:.1f}，风险收益严重不匹配")
-        effective_score = min(effective_score, 40)
+        if rr_a >= 0.8:
+            effective_score = min(effective_score, 49)   # 接近C级边界
+        elif rr_a >= 0.5:
+            effective_score = min(effective_score, 42)
+        elif rr_a >= 0.3:
+            effective_score = min(effective_score, 34)
+        else:
+            effective_score = min(effective_score, 26)
 
     # ADX<20 震荡市 + NEUTRAL → 直接D级
     if adx < 20 and signal == "NEUTRAL":
@@ -2319,6 +2327,16 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
         # 3. V5.34: ADX强多头 + 卖出信号 → 趋势末端（如 AMD: ADX 41 strong_bull 但动能衰减见顶）
         if "bull" in adx_trend_lower and result["signal"] in ("SELL", "STRONG_SELL") and result.get("adx", 0) > 30:
             result["trend_top"] = True
+        # V2.2.0: 统一逆势标记（信号方向与ADX趋势相反）
+        # left_side: 买入信号 + ADX空头趋势
+        # trend_top: 卖出信号 + ADX多头趋势
+        result["counter_trend"] = result.get("left_side", False) or result.get("trend_top", False)
+        # 额外检测：ADX弱多头(<30) + 卖出信号 → 也算轻度逆势
+        if "bull" in adx_trend_lower and result["signal"] in ("SELL", "STRONG_SELL") and result.get("adx", 0) <= 30:
+            result["counter_trend"] = True
+        # ADX弱空头 + 买入信号 → 轻度逆势
+        if "bear" in adx_trend_lower and result["signal"] in ("BUY", "STRONG_BUY") and result.get("adx", 0) <= 30:
+            result["counter_trend"] = True
         # 4. V5.35.3: 盈亏比<1.0 降评级但不强制中性（JPM案例优化）
         # 只对有矛盾的情况才强制中性，有明确技术信号时保留信号但降级
         if rr_a < 1.0 and rr_a > 0 and result["signal"] not in ("NEUTRAL",):
@@ -2374,10 +2392,6 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     - **market**: 市场（us/hk/cn），默认美股
     - **pool**: "default"=固定池, "dynamic"=读取 stock_pool_dynamic.json
     """
-    # V5.40.4: 移入函数顶部，避免条件分支导致 UnboundLocalError
-    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-    _BEIJING_TZ = _tz(_td(hours=8))
-
     # V5.40.3: 参数兜底 — 模型常把参数填错，后端自动修正
     if not symbols or symbols.strip() == "":
         pool = "dynamic"
@@ -2386,9 +2400,9 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
         market = "us"
 
     # V5.40.2: 动态池模式（自动后台刷新，不再需要 Coze 单独调 discover_stocks）
+    # V5.40.4: 删除局部 from datetime import（导致非 dynamic 路径 UnboundLocalError）
+    # 模块级 from datetime import datetime, timedelta, timezone + BEIJING_TZ 已可用
     if pool == "dynamic":
-        from datetime import datetime, timedelta, timezone
-        BEIJING_TZ = timezone(timedelta(hours=8))
         pool_file = _TREND_FILE.parent / "stock_pool_dynamic.json"
         now = datetime.now(BEIJING_TZ)
         need_refresh = True
@@ -2641,8 +2655,14 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
 
     signal_map = {"BUY": "买入", "STRONG_BUY": "强烈买入", "SELL": "卖出", "STRONG_SELL": "强烈卖出", "NEUTRAL": "观望"}
 
-    for i, r in enumerate(results):
-        rank = f"#{i+1}"
+    # V2.2.0: D级折叠 — 表格只显示 A/B/C 排行
+    d_grade_results = [r for r in results if r["rating"] == "D"]
+    active_results = [r for r in results if r["rating"] != "D"]
+
+    show_rank = 0
+    for r in active_results:
+        show_rank += 1
+        rank = f"#{show_rank}"
         name = r["name"][:20] if len(r["name"]) > 20 else r["name"]
         price = f"{r['current_price']:.2f}"
         chg = f"{r['change_percent']:+.1f}%" if r['change_percent'] else "0.0%"
@@ -2673,95 +2693,118 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
         lines.append(f"{rank:^4}│{icon}{name:<12}│{price:>10}│{chg:>8}│{sig_cn:^6}│{rating:^9}│{r['trend_marker']}{score:>3}│{adx_s:>6}│{rsi_s:>5}│{rr_s:>6}│{pos_str}")
 
     lines.append(sep)
+
+    # V2.2.0: D级汇总（一行代替逐行展示）
+    if d_grade_results:
+        d_symbols = ", ".join([r["symbol"] for r in d_grade_results])
+        d_scores = [r["rating_score"] for r in d_grade_results]
+        score_range = f"{min(d_scores)}-{max(d_scores)}" if len(set(d_scores)) > 1 else str(d_scores[0])
+        lines.append(f"  📌 其余 {len(d_grade_results)} 只评分不足（D级 {score_range}分），暂无操作信号：{d_symbols}")
+        lines.append("")
     lines.append("")
 
-    # 详细摘要
-    lines.append("📊 详细摘要：")
-    lines.append("")
-
-    # V5.38: 共性信号汇总（减少重复描述）
-    _signal_groups = {}
-    _rsi_low = []   # RSI < 40 的超卖集群
-    _rsi_high = []  # RSI > 60 的超买集群
-    _boll_touch = []  # 触及布林带下轨
-    for r in results:
-        sig = r["signal"]
-        if sig not in _signal_groups:
-            _signal_groups[sig] = []
-        _signal_groups[sig].append(r)
-        if r.get("rsi", 50) < 40:
-            _rsi_low.append(r["symbol"])
-        if r.get("rsi", 50) > 60:
-            _rsi_high.append(r["symbol"])
-        if "触及布林带下轨" in (r.get("key_signals_text", "") or ""):
-            _boll_touch.append(r["symbol"])
-
-    # 输出共性提示（仅当有3只以上共性时）
-    _cluster_lines = []
-    for sig, members in _signal_groups.items():
-        if len(members) >= 3:
-            sig_cn = {"BUY": "买入", "STRONG_BUY": "强烈买入", "SELL": "卖出",
-                      "STRONG_SELL": "强烈卖出", "NEUTRAL": "观望"}.get(sig, sig)
-            _cluster_lines.append(f"⚠️ {sig_cn}集群：{len(members)}只（{', '.join([m['symbol'] for m in members[:8]])}{'…等' if len(members) > 8 else ''}）信号一致")
-    if len(_rsi_low) >= 3:
-        _cluster_lines.append(f"📉 RSI超卖集群：{', '.join(_rsi_low[:6])} RSI<40，短期反弹概率较大")
-    if len(_rsi_high) >= 3:
-        _cluster_lines.append(f"📈 RSI超买集群：{', '.join(_rsi_high[:6])} RSI>60，注意回调风险")
-    if len(_boll_touch) >= 3:
-        _cluster_lines.append(f"📊 布林带下轨触及：{', '.join(_boll_touch[:6])} 超卖")
-    if _cluster_lines:
-        lines.append("  📋 共性信号汇总：")
-        for _cl in _cluster_lines:
-            lines.append(f"    {_cl}")
+    # ===== 详细摘要 =====
+    # V2.2.0: 数据过期 → 简报模式，跳过详细摘要（仅保留共性信号+趋势追踪）
+    if not _stale:
+        lines.append("📊 详细摘要：")
         lines.append("")
 
-    for i, r in enumerate(results):
-        icon = "🟢" if r["rating"] == "A" else "🔵" if r["rating"] == "B" else "🟡" if r["rating"] == "C" else "🔴"
-        lines.append(f"  #{i+1} {icon} {r['name']}（{r['symbol']}）")
-        sig_display = signal_map.get(r["signal"], r["signal"])
-        if r.get("left_side"):
-            sig_display = sig_display + " ⚠️左侧交易（逆势信号，需额外谨慎）"
-        if r.get("trend_top"):
-            sig_display = sig_display + " ⚠️趋势末端（ADX强但动能衰减，见顶信号）"
-        # V2.1.12: 数据过期时信号追加过期标记
-        if _stale:
-            sig_display = sig_display + " ⚠️数据过期"
-        lines.append(f"     现价 {r['current_price']:.2f} ({r['change_percent']:+.1f}%) | "
-                     f"信号 {sig_display} | "
-                     f"评级 {r['rating']}级 {r['rating_score']}/100")
-        if trend_has_data:
-            lines.append(f"     🕐 {r['trend_marker']} {r['trend_label']}"
-                         f"（上次 {prev_trend.get(r['symbol'], {}).get('score', '?')}分"
-                         f" @ {prev_trend.get(r['symbol'], {}).get('time', '?')}）")
+        # V5.38: 共性信号汇总（基于 active_results，避免D级干扰）
+        _signal_groups = {}
+        _rsi_low = []
+        _rsi_high = []
+        _boll_touch = []
+        for r in active_results:
+            sig = r["signal"]
+            if sig not in _signal_groups:
+                _signal_groups[sig] = []
+            _signal_groups[sig].append(r)
+            if r.get("rsi", 50) < 40:
+                _rsi_low.append(r["symbol"])
+            if r.get("rsi", 50) > 60:
+                _rsi_high.append(r["symbol"])
+            if "触及布林带下轨" in (r.get("key_signals_text", "") or ""):
+                _boll_touch.append(r["symbol"])
 
-        is_neutral = r["signal"] in ("NEUTRAL", "HOLD")
+        _cluster_lines = []
+        for sig, members in _signal_groups.items():
+            if len(members) >= 2:  # V2.2.0: 降低门槛到2只（因为D级被折叠后集群变小）
+                sig_cn = {"BUY": "买入", "STRONG_BUY": "强烈买入", "SELL": "卖出",
+                          "STRONG_SELL": "强烈卖出", "NEUTRAL": "观望"}.get(sig, sig)
+                _cluster_lines.append(f"⚠️ {sig_cn}集群：{len(members)}只（{', '.join([m['symbol'] for m in members[:8]])}{'…等' if len(members) > 8 else ''}）信号一致")
+        if len(_rsi_low) >= 2:
+            _cluster_lines.append(f"📉 RSI超卖集群：{', '.join(_rsi_low[:6])} RSI<40，短期反弹概率较大")
+        if len(_rsi_high) >= 2:
+            _cluster_lines.append(f"📈 RSI超买集群：{', '.join(_rsi_high[:6])} RSI>60，注意回调风险")
+        if len(_boll_touch) >= 2:
+            _cluster_lines.append(f"📊 布林带下轨触及：{', '.join(_boll_touch[:6])} 超卖")
+        if _cluster_lines:
+            lines.append("  📋 共性信号汇总：")
+            for _cl in _cluster_lines:
+                lines.append(f"    {_cl}")
+            lines.append("")
 
-        # V5.39.1: 报告截断修复 — NEUTRAL信号缩短描述（共性信号汇总已覆盖）
-        if is_neutral:
-            # 精简版：ADX + RSI + RR 一行搞定，跳过冗长 key_signals_text
-            lines.append(f"     ADX {r['adx']:.0f}（{r['adx_trend']}）| RSI {r['rsi']:.0f} | "
-                         f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
-            if r.get("signal_summary"):
-                lines.append(f"     📝 {r['signal_summary']}")
-            # 仓位/参考价位 — 数据过期时抑制
-            if not _stale and r["position_pct"] > 0:
-                lines.append(f"     💡 参考入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
-        else:
-            # 完整版：买入/卖出信号保留全部技术细节
-            lines.append(f"     ADX {r['adx']:.0f}（{r['adx_trend']}）| RSI {r['rsi']:.0f} | "
-                         f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
-            if r["key_signals_text"]:
-                lines.append(f"     {r['key_signals_text'][:200]}")
-            if r.get("signal_summary"):
-                lines.append(f"     📝 {r['signal_summary']}")
-            # 仓位建议 — 数据过期时抑制，标注不可交易
-            if _stale:
-                lines.append(f"     ⚠️ 数据过期，暂不建议交易")
-            elif r["position_pct"] > 0:
-                lines.append(f"     💰 建议仓位 {r['position_pct']:.1f}% | "
-                             f"入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
+        for i, r in enumerate(active_results):
+            icon = "🟢" if r["rating"] == "A" else "🔵" if r["rating"] == "B" else "🟡"
+            lines.append(f"  #{i+1} {icon} {r['name']}（{r['symbol']}）")
+            sig_display = signal_map.get(r["signal"], r["signal"])
 
-        lines.append("")
+            # V2.2.0: 统一逆势标注
+            if r.get("counter_trend"):
+                sig_display = sig_display + " ⚠️逆势信号，置信度较低"
+            elif r.get("left_side"):
+                sig_display = sig_display + " ⚠️左侧交易（逆势信号，需额外谨慎）"
+            elif r.get("trend_top"):
+                sig_display = sig_display + " ⚠️趋势末端（ADX强但动能衰减，见顶信号）"
+
+            # V2.2.0: 涨跌>5% 加基本面提醒
+            chg_pct = r.get("change_percent", 0) or 0
+            big_move = abs(chg_pct) > 5
+            lines.append(f"     现价 {r['current_price']:.2f} ({chg_pct:+.1f}%) | "
+                         f"信号 {sig_display} | "
+                         f"评级 {r['rating']}级 {r['rating_score']}/100")
+            if big_move:
+                lines.append(f"     ⚠️ 当日涨跌{chg_pct:+.1f}%，请核实基本面原因（财报/重大新闻/板块事件）")
+            if trend_has_data:
+                lines.append(f"     🕐 {r['trend_marker']} {r['trend_label']}"
+                             f"（上次 {prev_trend.get(r['symbol'], {}).get('score', '?')}分"
+                             f" @ {prev_trend.get(r['symbol'], {}).get('time', '?')}）")
+
+            is_neutral = r["signal"] in ("NEUTRAL", "HOLD")
+
+            if is_neutral:
+                lines.append(f"     ADX {r['adx']:.0f}（{r['adx_trend']}）| RSI {r['rsi']:.0f} | "
+                             f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
+                if r.get("signal_summary"):
+                    lines.append(f"     📝 {r['signal_summary']}")
+                if r["position_pct"] > 0:
+                    lines.append(f"     💡 参考入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
+            else:
+                lines.append(f"     ADX {r['adx']:.0f}（{r['adx_trend']}）| RSI {r['rsi']:.0f} | "
+                             f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
+                if r["key_signals_text"]:
+                    lines.append(f"     {r['key_signals_text'][:200]}")
+                if r.get("signal_summary"):
+                    lines.append(f"     📝 {r['signal_summary']}")
+
+                # V2.2.0: 盈亏比校验
+                rr_val = r.get("rr_a", 0)
+                if rr_val < 1.0 and rr_val > 0:
+                    lines.append(f"     ⚠️ 盈亏比仅1:{rr_val:.1f}，扣除交易成本可能亏损")
+                elif rr_val > 5.0:
+                    lines.append(f"     ⚠️ 盈亏比异常偏高（1:{rr_val:.1f}），请确认止损止盈设置合理")
+
+                if r["position_pct"] > 0:
+                    lines.append(f"     💰 建议仓位 {r['position_pct']:.1f}% | "
+                                 f"入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
+
+            lines.append("")
+
+        # V2.2.0: D级一行汇总
+        if d_grade_results:
+            d_symbols = ", ".join([r["symbol"] for r in d_grade_results])
+            lines.append(f"  📌 其余 {len(d_grade_results)} 只（D级）：{d_symbols} — 评分不足，暂无操作信号")
+            lines.append("")
 
     # V5.34: 仓位公式备注 — 数据过期时抑制
     if not _stale:
