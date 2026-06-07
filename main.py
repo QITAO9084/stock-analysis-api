@@ -2435,37 +2435,34 @@ def batch_analyze(symbols: str, market: str = "us"):
                      f"信号 {sig_display} | "
                      f"评级 {r['rating']}级 {r['rating_score']}/100")
         if trend_has_data:
-            lines.append(f"     🕐 {r['trend_marker']} {r['trend_label']}（上次 {prev_trend.get(r['symbol'], {}).get('score', '?')}分 @ {prev_trend.get(r['symbol'], {}).get('time', '?')}）")
-        lines.append(f"     ADX {r['adx']:.0f}（{r['adx_trend']}）| RSI {r['rsi']:.0f} | "
-                     f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
-        if r["key_signals_text"]:
-            # V5.35.2: D/C级风险提示指纹化 — 根据实际RSI和ADX精确措辞
-            caveat = ""
-            rsi_val = r.get("rsi", 50)
-            if r["rating"] in ("D", "C") and r["signal"] == "NEUTRAL":
-                if "bull" in str(r.get("adx_trend", "")).lower():
-                    if rsi_val > 60:
-                        caveat = "⚠️ 趋势强但RSI偏高+盈亏比差，建议等回调 — "
-                    elif rsi_val < 40:
-                        caveat = "⚠️ 趋势强但RSI偏低+盈亏比差，底部未确认 — "
-                    else:
-                        caveat = "⚠️ 趋势尚可但盈亏比不佳，建议等待 — "
-                elif "bear" in str(r.get("adx_trend", "")).lower():
-                    if rsi_val < 35:
-                        caveat = "⚠️ 趋势偏空+RSI超卖，不宜抄底，等企稳信号 — "
-                    else:
-                        caveat = "⚠️ 趋势偏空，不宜追高，等待方向明朗 — "
-            lines.append(f"     {caveat}{r['key_signals_text'][:200]}")
-            # V5.35.4: 显示信号总结语（避免文字与参考价位矛盾）
+            lines.append(f"     🕐 {r['trend_marker']} {r['trend_label']}"
+                         f"（上次 {prev_trend.get(r['symbol'], {}).get('score', '?')}分"
+                         f" @ {prev_trend.get(r['symbol'], {}).get('time', '?')}）")
+
+        is_neutral = r["signal"] in ("NEUTRAL", "HOLD")
+
+        # V5.39.1: 报告截断修复 — NEUTRAL信号缩短描述（共性信号汇总已覆盖）
+        if is_neutral:
+            # 精简版：ADX + RSI + RR 一行搞定，跳过冗长 key_signals_text
+            lines.append(f"     ADX {r['adx']:.0f}（{r['adx_trend']}）| RSI {r['rsi']:.0f} | "
+                         f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
             if r.get("signal_summary"):
                 lines.append(f"     📝 {r['signal_summary']}")
-        # V5.35.4: 观望信号不显示"建议仓位"，改为"可关注"（避免与信号矛盾）
-        if r["position_pct"] > 0 and r["signal"] not in ("NEUTRAL", "HOLD"):
-            lines.append(f"     💰 建议仓位 {r['position_pct']:.1f}% | "
-                         f"入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
-        elif r["position_pct"] > 0 and r["signal"] in ("NEUTRAL", "HOLD"):
-            # 观望信号：只给参考价位，不明确建议操作
-            lines.append(f"     💡 可关注 | 参考入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
+            # 仓位/参考价位一行搞定
+            if r["position_pct"] > 0:
+                lines.append(f"     💡 参考入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
+        else:
+            # 完整版：买入/卖出信号保留全部技术细节
+            lines.append(f"     ADX {r['adx']:.0f}（{r['adx_trend']}）| RSI {r['rsi']:.0f} | "
+                         f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
+            if r["key_signals_text"]:
+                lines.append(f"     {r['key_signals_text'][:200]}")
+            if r.get("signal_summary"):
+                lines.append(f"     📝 {r['signal_summary']}")
+            if r["position_pct"] > 0:
+                lines.append(f"     💰 建议仓位 {r['position_pct']:.1f}% | "
+                             f"入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
+
         lines.append("")
 
     # V5.34: 仓位公式备注
