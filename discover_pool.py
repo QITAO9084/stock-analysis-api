@@ -21,6 +21,11 @@ import argparse
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
+# 修复 Windows 控制台 UTF-8 编码问题（emoji 打印需要）
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+
 # ---- 路径 ---------------------------------------------------------------
 # 优先用 PORTFOLIO_DIR 环境变量（Railway Volume 挂载点）
 _import_os = __import__("os")
