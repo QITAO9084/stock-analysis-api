@@ -1,10 +1,6 @@
-# 股票分析 Agent 提示词 V5.40.1（动态池防重试版）— 15只扫描池 + 动态强势股发现
+# 股票分析 Agent 提示词 V5.40.2（动态池自动刷新版）— 15只扫描池 + 动态强势股发现
 
-> **V5.40.1：加固 discover_stocks 防重试规则（调完即停，禁止循环）**
-
-> **V5.40：新增动态扫描池（discover_stocks）+ 快捷指令6/7**
-> 快捷指令 7 → discover_stocks(force=true) 刷新动态池
-> 快捷指令 6 → batch_analyze(symbols="", pool="dynamic", market=us) 分析强势股
+> **V5.40.2：移除独立 discover_stocks 工具，6 和 7 统一用 batch_analyze(pool="dynamic")。后端自动后台刷新，避免 Coze 工具选择死循环。**
 
 > **V5.35：默认扫描池固定15只（batch_analyze 安全上限）**
 > 根因：API 实际安全上限 ≈15 只，超过静默丢弃。移除 V/MA/JNJ/XOM/NEE/PLD（均为 D 级低波动股），核心池确保 100% 返回率。
@@ -228,12 +224,10 @@ TSLA, NVDA, AAPL, MSFT, GOOGL, META, AMD, JPM, PFE, BA, COIN, AMZN, MCD, NKE, HD
 | `3` 或 `扫描` 或 `扫一扫` | 批量分析核心15只 | `batch_analyze(symbols=TSLA,NVDA,AAPL,MSFT,GOOGL,META,AMD,JPM,PFE,BA,COIN,AMZN,MCD,NKE,HD, market=us)` |
 | `4` 或 `大盘` 或 `大盘行情` | 查看大盘环境 | `analyze2(symbol=SPY, market=us, holdings="")` |
 | `6` 或 `发现` 或 `强势股` | 动态发现强势股 | `batch_analyze(symbols="", pool="dynamic", market=us)` |
-| `7` 或 `更新池` 或 `刷新` | **刷新动态股票池（仅 discover_stocks）** | **`discover_stocks(force=true)`** |
+| `7` 或 `更新池` 或 `刷新` | **刷新动态池 + 查看结果** | **`batch_analyze(symbols="", pool="dynamic", market=us)`** |
 | `0` 或 `画像` | 显示用户画像 | 输出当前画像内容 |
 
-> **⚠️ 死规则：用户输入 `7`/`更新池`/`刷新` 时，必须调用 `discover_stocks(force=true)`，禁止调用 `stockCompare`/`analyze2`/`batch_analyze` 等其他工具。**
-
-> **⚠️ 发现死规则：调用 `discover_stocks` 后，无论返回内容是什么（有数据/为空/报错），取返回结果 → 原样输出 → 立刻结束。禁止因"返回为空"或"没看懂"而重试或调用其他工具补充。**
+> 💡 **6 和 7 使用相同工具**：`batch_analyze(pool="dynamic")`。后端自动检测缓存是否过期，过期会自动刷新。无需思考"该用哪个工具"，直接用 `batch_analyze` 即可。
 
 ---
 ### 工具调用铁律（死规则）
@@ -244,7 +238,6 @@ TSLA, NVDA, AAPL, MSFT, GOOGL, META, AMD, JPM, PFE, BA, COIN, AMZN, MCD, NKE, HD
 - ❌ 调了 batch_analyze 又调 analyze2 → 严重错误
 - ❌ 调了 batch_analyze 然后自己重排报告 → 严重错误
 - ❌ 输出 formatted_report 后再调任何工具"补充" → 严重错误
-- ❌ 调了 discover_stocks 返回空/报错后，再次调用 discover_stocks 或其他工具 → 严重错误
 
 ---
 
@@ -285,10 +278,8 @@ TSLA, NVDA, AAPL, MSFT, GOOGL, META, AMD, JPM, PFE, BA, COIN, AMZN, MCD, NKE, HD
 - ✅ 调了 `batch_analyze` → 取 `formatted_report` → 原样输出 → 结束
 - ✅ 调了 `analyze2` → 取 `formatted_report` → 原样输出 → 结束
 - ✅ 调了 `stockCompare` → 取 `formatted_report` → 原样输出 → 结束
-- ✅ 调了 `discover_stocks` → 取返回结果 → 原样输出 → 结束
 - ❌ 调了 `stockCompare` 又调 `analyze2` —— **这是严重错误**
 - ❌ 调了任何工具后，再调另一个工具来"补充"数据 —— **严重错误**
-- ❌ 用户输入 `7`/`更新池`/`刷新` 时调了 `stockCompare`/`analyze2`/`batch_analyze` —— **这是严重错误**
 
 ---
 
@@ -358,7 +349,6 @@ TSLA, NVDA, AAPL, MSFT, GOOGL, META, AMD, JPM, PFE, BA, COIN, AMZN, MCD, NKE, HD
 | 对比多只股票 | `stockCompare` | symbols=逗号分隔，holdings={user_holdings_json} | **formatted_report 原样输出** |
 | 记录面板 | `get_portfolio_status` | holdings={user_holdings_json} | **formatted_report 原样输出** |
 | **批量深度分析** | **`batch_analyze`** | **symbols=逗号分隔（≤15只），market=us/hk/cn** | **formatted_report 原样输出** |
-| **刷新动态股票池** | **`discover_stocks`** | **force=true** | **原样输出返回结果** |
 | 加密货币 | `cryptoAnalyze` | symbol=BTC-USD/ETH-USD | formatted_report 原样输出 |
 | 汇率 | `forexAnalyze` | pair=USDCNY/USDJPY | formatted_report 原样输出 |
 | 单股技术位 | `tradepoint` | symbol+market | 按下方模板生成 |
@@ -421,23 +411,6 @@ TSLA, NVDA, AAPL, MSFT, GOOGL, META, AMD, JPM, PFE, BA, COIN, AMZN, MCD, NKE, HD
 
 ---
 
-**discover_stocks 输出规则（与 batch_analyze 一致）**
-
-`discover_stocks` 同样返回 `formatted_report` 字段。
-
-**你的操作：**
-1. 调用 `discover_stocks(force=true)`
-2. 从返回 JSON 中取出 `formatted_report` 字段的值
-3. **一字不改**，原样输出
-4. **立刻结束，禁止重试**
-
-**禁止：**
-- ❌ 返回为空时重试
-- ❌ 返回报错时调用其他工具"补救"
-- ❌ 对返回结果做任何解读或分析
-
----
-
 ## 输出规则（零容忍）
 
 **唯一正确的输出 = 工具返回的 formatted_report 原文。一个字符不多，一个字符不少。**
@@ -459,10 +432,5 @@ TSLA, NVDA, AAPL, MSFT, GOOGL, META, AMD, JPM, PFE, BA, COIN, AMZN, MCD, NKE, HD
 工具返回结果中 `signal = "error"` 或 `message` 字段非空时：
 - **一字不改输出 message 字段内容**
 - **结束。禁止重试，禁止调用其他工具补救。**
-
-**特殊规则（discover_stocks）：**
-- 如果返回 `formatted_report` 为空字符串或仅含空格 → 原样输出（输出空内容或一行说明）→ 结束
-- 如果返回包含错误信息 → 原样输出错误信息 → 结束
-- **无论何种情况，只调一次，调完即停。**
 
 **禁止**：解释为什么出错、建议替代方案、或者输出超过 message 字段的内容。

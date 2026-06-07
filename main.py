@@ -2263,24 +2263,51 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     - **market**: 市场（us/hk/cn），默认美股
     - **pool**: "default"=固定池, "dynamic"=读取 stock_pool_dynamic.json
     """
-    # V5.40: 动态池模式
+    # V5.40.2: 动态池模式（自动后台刷新，不再需要 Coze 单独调 discover_stocks）
     if pool == "dynamic":
+        from datetime import datetime, timedelta, timezone
+        BEIJING_TZ = timezone(timedelta(hours=8))
         pool_file = _TREND_FILE.parent / "stock_pool_dynamic.json"
-        if not pool_file.exists():
+        now = datetime.now(BEIJING_TZ)
+        need_refresh = True
+
+        if pool_file.exists():
+            try:
+                with open(pool_file, "r", encoding="utf-8") as f:
+                    pool_data = json.load(f)
+                updated = pool_data.get("updated", "")
+                updated_dt = datetime.strptime(updated, "%Y-%m-%d %H:%M").replace(tzinfo=BEIJING_TZ)
+                if (now - updated_dt) < timedelta(hours=1):
+                    need_refresh = False
+                    dynamic_symbols = [item["symbol"] for item in pool_data.get("top_30", [])]
+            except Exception:
+                pass
+
+        if need_refresh:
+            # 后台触发刷新，立刻返回友好提示
+            try:
+                import subprocess, sys as _sys
+                from pathlib import Path as _Path
+                _SCRIPT_DIR = _Path(__file__).parent
+                _DISCOVER_SCRIPT = _SCRIPT_DIR / "discover_pool.py"
+                subprocess.Popen(
+                    [_sys.executable, str(_DISCOVER_SCRIPT)],
+                    cwd=str(_SCRIPT_DIR),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except Exception:
+                pass
             return {"formatted_report": (
-                "⚠️ 动态池文件不存在，请先运行 discover_pool.py 生成。\n"
-                "   或访问 /stock/discover 端点立即生成。"
+                "📊 动态池刷新已触发，正在后台扫描 100 只美股（约需 60 秒）。\n"
+                "请 1 分钟后再发送「6」或「7」查看最新结果。"
             )}
-        try:
-            with open(pool_file, "r", encoding="utf-8") as f:
-                pool_data = json.load(f)
-            dynamic_symbols = [item["symbol"] for item in pool_data.get("top_30", [])]
-            if not dynamic_symbols:
-                return {"formatted_report": "⚠️ 动态池为空，请重新运行 discover_pool.py。"}
-            symbols = ",".join(dynamic_symbols[:15])  # 最多取前15只
-            print(f"[batch_analyze] 动态池模式：使用 {len(dynamic_symbols[:15])} 只股票")
-        except Exception as e:
-            return {"formatted_report": f"⚠️ 读取动态池失败：{str(e)}"}
+
+        if not dynamic_symbols:
+            return {"formatted_report": "⚠️ 动态池为空，刷新中，请稍后重试。"}
+        symbols = ",".join(dynamic_symbols[:15])
+        print(f"[batch_analyze] 动态池模式：使用 {len(dynamic_symbols[:15])} 只股票")
 
     if not symbols or symbols.strip() == "":
         return {"formatted_report": "⚠️ 请提供股票代码（symbols 参数），或设置 pool=dynamic。"}
