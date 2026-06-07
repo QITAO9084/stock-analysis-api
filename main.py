@@ -24,22 +24,9 @@ def get_data_date_str(market="us"):
     - 周末 → 显示上周五收盘日期
     - 工作日 → 显示今日（盘中）或昨日收盘
     """
-    now = beijing_now()
-    wd = now.weekday()  # 周一=0 ... 周日=6
     market_name = {"us": "美股", "hk": "港股", "cn": "A股"}.get(market.lower(), market)
 
-    # 周末：回溯到上周五
-    if wd == 5:  # 周六
-        last_trade = now - timedelta(days=1)
-        weekday_cn = "周五"
-        return f"📅 数据日期：{last_trade.strftime('%Y-%m-%d')}（{weekday_cn}收盘，{market_name}休市）"
-    if wd == 6:  # 周日
-        last_trade = now - timedelta(days=2)
-        weekday_cn = "周五"
-        return f"📅 数据日期：{last_trade.strftime('%Y-%m-%d')}（{weekday_cn}收盘，{market_name}休市）"
-
-    # 工作日：简化判断（精准判断需转换时区，此处用日期标注足以消除误解）
-    # 尝试从 stock_pool_dynamic.json 读取 actual_date 字段
+    # 优先用缓存中的 actual_date（discover_pool.py 已用美东时间计算）
     try:
         from pathlib import Path
         _cache = Path(__file__).parent / "stock_pool_dynamic.json"
@@ -48,10 +35,30 @@ def get_data_date_str(market="us"):
             _d = json.loads(_cache.read_text(encoding="utf-8"))
             actual = _d.get("actual_date", "")
             if actual:
+                # 判断是否为周末数据
+                _now_check = beijing_now()
+                _wd_check = _now_check.weekday()
+                if _wd_check >= 5:
+                    return f"📅 数据日期：{actual}（周五收盘，{market_name}休市）"
                 return f"📅 数据日期：{actual}（{market_name}收盘/盘中）"
     except Exception:
         pass
 
+    # 兜底：用美东时间判断周末
+    try:
+        try:
+            from zoneinfo import ZoneInfo
+            _us = datetime.now(ZoneInfo("America/New_York"))
+        except Exception:
+            _us = beijing_now() - timedelta(hours=13)
+        _wd = _us.weekday()
+        if _wd >= 5:
+            _last_fri = (_us.date() - timedelta(days=(_wd - 4))).strftime("%Y-%m-%d")
+            return f"📅 数据日期：{_last_fri}（周五收盘，{market_name}休市）"
+    except Exception:
+        pass
+
+    now = beijing_now()
     return f"📅 数据日期：{now.strftime('%Y-%m-%d')}（{market_name}盘中/昨日收盘）"
 
 class PortfolioOpenRequest(BaseModel):
@@ -2465,27 +2472,43 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     prev_trend = _load_trend()
     new_trend = {}
     now_ts = beijing_now().strftime("%Y-%m-%d %H:%M")
+
+    # V2.1.7: 读取 actual_date 用于判断数据是否更新（周末休市时数据不变）
+    _pool_path = _TREND_FILE.parent / "stock_pool_dynamic.json"
+    _data_date = ""
+    try:
+        if _pool_path.exists():
+            with open(_pool_path, "r", encoding="utf-8") as _f:
+                _pool_data = json.load(_f)
+                _data_date = _pool_data.get("actual_date", "")
+    except Exception:
+        pass
     for r in results:
         sym = r["symbol"]
         cur_score = r["rating_score"]
         cur_price = r["current_price"]
         prev = prev_trend.get(sym, {})
         prev_score = prev.get("score", 0)
+        prev_actual = prev.get("actual_date", "")
         if prev_score and cur_score:
             diff = cur_score - prev_score
             if diff >= 3:
-                r["trend_marker"] = "📈"  # 趋势回升
+                r["trend_marker"] = "📈"
                 r["trend_label"] = f"趋势回升 +{diff}"
             elif diff <= -3:
-                r["trend_marker"] = "📉"  # 趋势走弱
+                r["trend_marker"] = "📉"
                 r["trend_label"] = f"趋势走弱 {diff}"
+            elif prev_actual and prev_actual == _data_date:
+                # V2.1.7: 数据未更新（周末/休市）→ 不显示"趋势延续"
+                r["trend_marker"] = "🆕"
+                r["trend_label"] = "数据未更新"
             else:
                 r["trend_marker"] = "➡️"
                 r["trend_label"] = f"趋势延续 ({diff:+d})"
         else:
             r["trend_marker"] = "🆕"
             r["trend_label"] = "首次扫描"
-        new_trend[sym] = {"score": cur_score, "price": cur_price, "time": now_ts}
+        new_trend[sym] = {"score": cur_score, "price": cur_price, "time": now_ts, "actual_date": _data_date}
     # 首次扫描提示
     trend_has_data = len(prev_trend) > 0
 
@@ -2649,8 +2672,12 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
         up_count = sum(1 for r in results if r.get("trend_marker") == "📈")
         down_count = sum(1 for r in results if r.get("trend_marker") == "📉")
         steady_count = sum(1 for r in results if r.get("trend_marker") == "➡️")
+        unchanged_count = sum(1 for r in results if r.get("trend_marker") == "🆕")
         lines.append("📊 趋势追踪：")
-        lines.append(f"   📈 回升 {up_count} 只 | 📉 走弱 {down_count} 只 | ➡️ 延续 {steady_count} 只")
+        _trend_parts = [f"📈 回升 {up_count} 只", f"📉 走弱 {down_count} 只", f"➡️ 延续 {steady_count} 只"]
+        if unchanged_count > 0:
+            _trend_parts.append(f"🆕 未更新 {unchanged_count} 只")
+        lines.append("   " + " | ".join(_trend_parts))
         # 列出明显变化的
         big_movers = [r for r in results if r.get("trend_marker") in ("📈", "📉")]
         if big_movers:

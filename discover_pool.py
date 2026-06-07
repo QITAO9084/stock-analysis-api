@@ -29,6 +29,11 @@ import time
 import argparse
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo
+    _US_EASTERN = ZoneInfo("America/New_York")
+except Exception:
+    _US_EASTERN = None
 
 # 修复 Windows 控制台 UTF-8 编码问题（emoji 打印需要）
 if sys.platform == "win32":
@@ -527,15 +532,23 @@ def run_discover(fast: bool = False, show_regime_only: bool = False) -> dict:
     print(f"🔍 开始扫描 {len(ALL_100)} 只美股（V2.1 动态权重）...")
     print(f"⏳ 预计耗时 60-90 秒（下载 1mo 日线 + 指标计算）")
 
-    # V2.1.6: 计算实际数据日期（周末回溯到上周五）
-    now_date = beijing_now()
-    wd = now_date.weekday()
-    if wd == 5:   # 周六
-        actual_date = (now_date - timedelta(days=1)).strftime("%Y-%m-%d")
-    elif wd == 6: # 周日
-        actual_date = (now_date - timedelta(days=2)).strftime("%Y-%m-%d")
+    # V2.1.7: 用美东时间计算 actual_date（避免时差导致日期差一天）
+    try:
+        if _US_EASTERN is not None:
+            _now_us = datetime.now(_US_EASTERN)
+        else:
+            # zoneinfo 不可用时，近似：北京时间 -13 小时（夏令时）
+            _naive = beijing_now() - timedelta(hours=13)
+            _now_us = _naive.replace(tzinfo=timezone(timedelta(hours=8)))
+            _now_us = _naive  # 用 naive 日期做 weekday 判断
+    except Exception:
+        _now_us = beijing_now()
+    _wd_us = _now_us.weekday()
+    if _wd_us >= 5:  # 美东周六(5)或周日(6) → 回溯到周五
+        _days_back = _wd_us - 4
+        actual_date = (_now_us - timedelta(days=_days_back)).strftime("%Y-%m-%d")
     else:
-        actual_date = now_date.strftime("%Y-%m-%d")
+        actual_date = _now_us.strftime("%Y-%m-%d")
 
     t0 = time.time()
     data = fetch_batch(ALL_100, regime=regime)
