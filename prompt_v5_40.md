@@ -1,6 +1,6 @@
-# 股票分析 Agent 提示词 V5.40.2（动态池自动刷新版）— 15只扫描池 + 动态强势股发现
+# 股票分析 Agent 提示词 V5.40.3（参数兜底版）— 15只扫描池 + 动态强势股发现
 
-> **V5.40.2：移除独立 discover_stocks 工具，6 和 7 统一用 batch_analyze(pool="dynamic")。后端自动后台刷新，避免 Coze 工具选择死循环。**
+> **V5.40.3：后端参数兜底 — symbols="" 或 market="dynamic" 时自动走动态池，前端不需要传 pool 参数。**
 
 > **V5.35：默认扫描池固定15只（batch_analyze 安全上限）**
 > 根因：API 实际安全上限 ≈15 只，超过静默丢弃。移除 V/MA/JNJ/XOM/NEE/PLD（均为 D 级低波动股），核心池确保 100% 返回率。
@@ -223,11 +223,11 @@ TSLA, NVDA, AAPL, MSFT, GOOGL, META, AMD, JPM, PFE, BA, COIN, AMZN, MCD, NKE, HD
 | `2` 或 `日志` 或 `复盘` | 查看交易日志 | `get_trade_journal(holdings={user_holdings_json})` |
 | `3` 或 `扫描` 或 `扫一扫` | 批量分析核心15只 | `batch_analyze(symbols=TSLA,NVDA,AAPL,MSFT,GOOGL,META,AMD,JPM,PFE,BA,COIN,AMZN,MCD,NKE,HD, market=us)` |
 | `4` 或 `大盘` 或 `大盘行情` | 查看大盘环境 | `analyze2(symbol=SPY, market=us, holdings="")` |
-| `6` 或 `发现` 或 `强势股` | 动态发现强势股 | `batch_analyze(symbols="", pool="dynamic", market=us)` |
-| `7` 或 `更新池` 或 `刷新` | **刷新动态池 + 查看结果** | **`batch_analyze(symbols="", pool="dynamic", market=us)`** |
+| `6` 或 `发现` 或 `强势股` | 动态发现强势股 | `batch_analyze(symbols="", market="us")` |
+| `7` 或 `更新池` 或 `刷新` | **刷新动态池 + 查看结果** | **`batch_analyze(symbols="", market="us")`** |
 | `0` 或 `画像` | 显示用户画像 | 输出当前画像内容 |
 
-> 💡 **6 和 7 使用相同工具**：`batch_analyze(pool="dynamic")`。后端自动检测缓存是否过期，过期会自动刷新。无需思考"该用哪个工具"，直接用 `batch_analyze` 即可。
+> 💡 **symbols="" 即触发动态池**：后端自动识别空 symbols → 动态强势股池。你不需要管 `pool` 参数，传空 symbols 就行。
 
 ---
 ### 工具调用铁律（死规则）
