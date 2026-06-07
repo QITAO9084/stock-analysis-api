@@ -68,6 +68,54 @@ def get_data_date_str(market="us"):
     now = beijing_now()
     return f"📅 数据日期：{now.strftime('%Y-%m-%d')}（{market_name}盘中/昨日收盘）"
 
+
+def _is_data_stale(data_date_str: str):
+    """V2.1.12: 检测美股数据是否过期。
+    返回 (is_stale, days_old, next_trade_str)
+    - 周末：数据来自周五 → 过期，返回下一交易日
+    - 周一盘中前：数据来自周五 → 过期
+    - 工作日：数据 > 1天 → 过期
+    """
+    if not data_date_str:
+        return False, 0, ""
+
+    try:
+        from datetime import date
+        data_date = date.fromisoformat(data_date_str)
+
+        # 美东时间
+        try:
+            from zoneinfo import ZoneInfo
+            _us = datetime.now(ZoneInfo("America/New_York"))
+        except Exception:
+            _us = beijing_now() - timedelta(hours=13)
+
+        now_ny = _us.date()
+        now_wd = _us.weekday()  # 0=Mon, 4=Fri, 5=Sat, 6=Sun
+        days_diff = (now_ny - data_date).days
+
+        if now_wd >= 5:
+            # Weekend: data from Friday or earlier
+            if days_diff >= 1:
+                next_trade_day = now_ny + timedelta(days=(7 - now_wd))
+                return True, days_diff, f"{next_trade_day.strftime('%m/%d')}（周一）"
+
+        elif now_wd == 0:
+            # Monday: data from Friday (3 days) or Saturday (2 days)
+            if days_diff >= 2:
+                return True, days_diff, f"{now_ny.strftime('%m/%d')}（周一）"
+
+        else:
+            # Tue-Fri: data more than 1 day old
+            if days_diff >= 2:
+                return True, days_diff, now_ny.strftime("%m/%d")
+
+        return False, days_diff, ""
+
+    except Exception:
+        return False, 0, ""
+
+
 class PortfolioOpenRequest(BaseModel):
     symbol: str
     entry_price: float = 0
@@ -2326,6 +2374,10 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     - **market**: 市场（us/hk/cn），默认美股
     - **pool**: "default"=固定池, "dynamic"=读取 stock_pool_dynamic.json
     """
+    # V5.40.4: 移入函数顶部，避免条件分支导致 UnboundLocalError
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    _BEIJING_TZ = _tz(_td(hours=8))
+
     # V5.40.3: 参数兜底 — 模型常把参数填错，后端自动修正
     if not symbols or symbols.strip() == "":
         pool = "dynamic"
@@ -2554,7 +2606,19 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     lines.append(f"多头 {buy_count} | 空头 {sell_count} | 中性 {neutral_count}")
     lines.append(f"大盘环境：{mkt['name']} {mkt['index_price']}（近30日 {mkt.get('change_30d', 0):+.1f}%，"
                  f"{mkt.get('grade', '?')} → 评分乘数 ×{mkt['multiplier']}）")
-    lines.append("⏱️ 信号有效期：3~5个交易日（此后需重新评估）")
+
+    # V2.1.12: 数据过期检测
+    _stale, _stale_days, _stale_next = _is_data_stale(_data_date) if _data_date else (False, 0, "")
+    if _stale:
+        lines.append("")
+        lines.append(f"⚠️⚠️⚠️ 数据已过期 {_stale_days} 天！⚠️⚠️⚠️")
+        lines.append(f"    数据日期：{_data_date}（距今 {_stale_days} 天），"
+                     f"以下所有信号基于旧数据生成，仅供参考，不可作为交易依据！")
+        if _stale_next:
+            lines.append(f"    请等到{_stale_next}开盘后重新分析，获取最新数据。")
+        lines.append("")
+    else:
+        lines.append("⏱️ 信号有效期：3~5个交易日（此后需重新评估）")
     # V2.1.6: 数据日期标注（周末/非交易时段提示）
     lines.append(get_data_date_str(market))
     # V5.39: 市场状态自适应 — 熊市自动降仓位上限
@@ -2589,7 +2653,11 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
         rsi_s = f"{r['rsi']:.0f}"
         rr_s = f"1:{r['rr_a']}" if r['rr_a'] and r['rr_a'] > 0 else "N/A"
         pos_pct = r["position_pct"]
-        pos_str = f"{pos_pct:.1f}%仓位" if pos_pct > 0 else "不建议"
+        # V2.1.12: 数据过期时全部标注为不可交易
+        if _stale:
+            pos_str = "数据过期"
+        else:
+            pos_str = f"{pos_pct:.1f}%仓位" if pos_pct > 0 else "不建议"
 
         # 颜色标记（文本）
         icon = ""
@@ -2655,6 +2723,9 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
             sig_display = sig_display + " ⚠️左侧交易（逆势信号，需额外谨慎）"
         if r.get("trend_top"):
             sig_display = sig_display + " ⚠️趋势末端（ADX强但动能衰减，见顶信号）"
+        # V2.1.12: 数据过期时信号追加过期标记
+        if _stale:
+            sig_display = sig_display + " ⚠️数据过期"
         lines.append(f"     现价 {r['current_price']:.2f} ({r['change_percent']:+.1f}%) | "
                      f"信号 {sig_display} | "
                      f"评级 {r['rating']}级 {r['rating_score']}/100")
@@ -2672,8 +2743,8 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                          f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
             if r.get("signal_summary"):
                 lines.append(f"     📝 {r['signal_summary']}")
-            # 仓位/参考价位一行搞定
-            if r["position_pct"] > 0:
+            # 仓位/参考价位 — 数据过期时抑制
+            if not _stale and r["position_pct"] > 0:
                 lines.append(f"     💡 参考入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
         else:
             # 完整版：买入/卖出信号保留全部技术细节
@@ -2683,16 +2754,20 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                 lines.append(f"     {r['key_signals_text'][:200]}")
             if r.get("signal_summary"):
                 lines.append(f"     📝 {r['signal_summary']}")
-            if r["position_pct"] > 0:
+            # 仓位建议 — 数据过期时抑制，标注不可交易
+            if _stale:
+                lines.append(f"     ⚠️ 数据过期，暂不建议交易")
+            elif r["position_pct"] > 0:
                 lines.append(f"     💰 建议仓位 {r['position_pct']:.1f}% | "
                              f"入场 {r['entry_a']:.2f} | 止损 {r['stop_loss_a']:.2f} | 止盈 {r['take_profit_a']:.2f}")
 
         lines.append("")
 
-    # V5.34: 仓位公式备注
-    lines.append("📐 仓位公式：基准=评分/100×20%，盈亏比<1:1仓位减半，>2:1×1.3，单票上限20%，总仓位≤60%")
-    lines.append("📝 止损/止盈依据：")
-    lines.append("   方案A止损=关键支撑（MA20/MA50/近20日低点）下方1-2%，止盈=3倍ATR或近20日高点上方1-3%")
+    # V5.34: 仓位公式备注 — 数据过期时抑制
+    if not _stale:
+        lines.append("📐 仓位公式：基准=评分/100×20%，盈亏比<1:1仓位减半，>2:1×1.3，单票上限20%，总仓位≤60%")
+        lines.append("📝 止损/止盈依据：")
+        lines.append("   方案A止损=关键支撑（MA20/MA50/近20日低点）下方1-2%，止盈=3倍ATR或近20日高点上方1-3%")
     lines.append("")
 
     # V5.37: 趋势汇总（仅在有历史数据时显示）
@@ -2706,6 +2781,9 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
         if unchanged_count > 0:
             _trend_parts.append(f"🆕 未更新 {unchanged_count} 只")
         lines.append("   " + " | ".join(_trend_parts))
+        # V2.1.12: 全部未更新时明确提示
+        if unchanged_count == len(results):
+            lines.append(f"   ⚠️ 全部 {unchanged_count} 只数据均未更新，信号仅作参考，不可作为交易依据。")
         # 列出明显变化的
         big_movers = [r for r in results if r.get("trend_marker") in ("📈", "📉")]
         if big_movers:
