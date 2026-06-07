@@ -2291,24 +2291,46 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                 pass
 
         if need_refresh:
-            # 后台触发刷新，立刻返回友好提示
+            import subprocess, sys as _sys
+            from pathlib import Path as _Path
+            _SCRIPT_DIR = _Path(__file__).parent
+            _DISCOVER_SCRIPT = _SCRIPT_DIR / "discover_pool.py"
+            _LOCK_FILE = _SCRIPT_DIR / "stock_pool_dynamic.lock"
+
+            # 检查是否已有刷新在进行中
+            if _LOCK_FILE.exists():
+                try:
+                    with open(_LOCK_FILE, "r", encoding="utf-8") as lf:
+                        lock_data = json.load(lf)
+                    lock_age = time.time() - lock_data.get("started_at", 0)
+                    if lock_age < 120:
+                        return {"formatted_report": (
+                            "⏳ 动态池正在刷新中（已运行约 " + str(int(lock_age)) + " 秒）。\n"
+                            + "请等待刷新完成后再发送「6」查看结果。"
+                        )}
+                    else:
+                        # 锁超时（>120s），清理旧锁
+                        _LOCK_FILE.unlink()
+                except Exception:
+                    try:
+                        _LOCK_FILE.unlink()
+                    except Exception:
+                        pass
+
+            # 后台触发刷新（stderr 写入日志文件便于排查问题）
             try:
-                import subprocess, sys as _sys
-                from pathlib import Path as _Path
-                _SCRIPT_DIR = _Path(__file__).parent
-                _DISCOVER_SCRIPT = _SCRIPT_DIR / "discover_pool.py"
                 subprocess.Popen(
                     [_sys.executable, str(_DISCOVER_SCRIPT)],
                     cwd=str(_SCRIPT_DIR),
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=open(str(_SCRIPT_DIR / "discover_pool.log"), "a"),
                     start_new_session=True,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                return {"formatted_report": "⚠️ 触发刷新失败：" + str(e)}
             return {"formatted_report": (
                 "📊 动态池刷新已触发，正在后台扫描 100 只美股（约需 60 秒）。\n"
-                "请 1 分钟后再发送「6」或「7」查看最新结果。"
+                "请 1 分钟后再发送「6」查看最新结果。"
             )}
 
         if not dynamic_symbols:
@@ -2587,12 +2609,34 @@ def discover_stocks(limit: int = 30, force: bool = False):
         from pathlib import Path as _Path
         _SCRIPT_DIR = _Path(__file__).parent
         _DISCOVER_SCRIPT = _SCRIPT_DIR / "discover_pool.py"
+        _LOCK_FILE = _SCRIPT_DIR / "stock_pool_dynamic.lock"
+
+        # 检查是否已有刷新在进行中
+        if _LOCK_FILE.exists():
+            try:
+                with open(_LOCK_FILE, "r", encoding="utf-8") as lf:
+                    lock_data = json.load(lf)
+                lock_age = time.time() - lock_data.get("started_at", 0)
+                if lock_age < 120:
+                    return {"formatted_report": (
+                        "⏳ 动态池正在刷新中（已运行约 " + str(int(lock_age)) + " 秒）。\n"
+                        "请等待刷新完成后再发送「7」查看最新结果。"
+                    )}
+                else:
+                    # 锁超时（>120s），清理旧锁
+                    _LOCK_FILE.unlink()
+            except Exception:
+                try:
+                    _LOCK_FILE.unlink()
+                except Exception:
+                    pass
+
         # 后台运行，不等待完成（避免 Coze 超时重试）
         subprocess.Popen(
             [_sys.executable, str(_DISCOVER_SCRIPT)],
             cwd=str(_SCRIPT_DIR),
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=open(str(_SCRIPT_DIR / "discover_pool.log"), "a"),
             start_new_session=True,
         )
         return {"formatted_report": (

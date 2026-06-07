@@ -45,6 +45,7 @@ else:
     _BASE_DIR = Path(__file__).parent
 
 _CACHE_FILE = _BASE_DIR / "stock_pool_dynamic.json"
+_LOCK_FILE = _CACHE_FILE.with_suffix(".lock")
 
 # ---- 市场基准（用于检测市场状态）-----------------------------------------
 MARKET_BENCHMARK = "SPY"
@@ -532,9 +533,59 @@ def run_discover(fast: bool = False, show_regime_only: bool = False) -> dict:
     print(f"✅ 下载+计算完成（{elapsed:.1f}秒），成功 {len(data)}/{len(ALL_100)} 只")
 
     if not data:
-        print("❌ 没有获取到任何数据，返回空结果")
-        return {"updated": beijing_now().strftime("%Y-%m-%d %H:%M"),
-                "total_scanned": 0, "top_30": [], "sector_summary": {}}
+        print("❌ 没有获取到任何数据，尝试降级到旧缓存...")
+        # 降级策略：yfinance 限流/失败时，使用旧缓存或静态备用池
+        if _CACHE_FILE.exists():
+            try:
+                with open(_CACHE_FILE, "r", encoding="utf-8") as f:
+                    old_cache = json.load(f)
+                old_updated = old_cache.get("updated", "?")
+                print(f"📦 降级：使用旧缓存（{old_updated}），标记为 stale")
+                old_cache["updated"] = beijing_now().strftime("%Y-%m-%d %H:%M") + " (stale, 数据源限流)"
+                old_cache["is_fresh"] = False
+                # 重新写回（更新时间戳）
+                with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(old_cache, f, ensure_ascii=False, indent=2)
+                return old_cache
+            except Exception:
+                pass
+
+        # 连旧缓存都没有：返回静态紧急备用池（SPY + 核心科技股）
+        print("📦 降级：无旧缓存，使用静态紧急备用池（SPY + 15 只核心科技股）")
+        emergency_symbols = [
+            "SPY", "QQQ", "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META",
+            "TSLA", "AMD", "JPM", "COIN", "BA", "ORCL", "NFLX", "AVGO", "CRM"
+        ]
+        emergency_top = []
+        for rank, sym in enumerate(emergency_symbols[:15], 1):
+            sector = "其他"
+            for s, symbols in SECTORS.items():
+                if sym in symbols:
+                    sector = s
+                    break
+            emergency_top.append({
+                "rank": rank, "symbol": sym, "close": 0, "change_pct_5d": 0,
+                "rsi": 50, "adx": 25, "ma_align": "neutral",
+                "score": 50, "volume_avg": 0, "sector": sector,
+            })
+
+        emergency_result = {
+            "version": "2.1",
+            "algorithm": "4-factor dynamic weights (emergency fallback)",
+            "regime": regime,
+            "regime_cn": {"bull": "🐂 牛市", "neutral": "📊 震荡", "bear": "🐻 熊市"}.get(regime, regime),
+            "weights": WEIGHT_MATRIX[regime],
+            "updated": beijing_now().strftime("%Y-%m-%d %H:%M") + " (紧急备用池, yfinance限流)",
+            "total_scanned": 0,
+            "score_distribution": {"A(>=70)": 0, "B(55-69)": 0, "C(40-54)": 0, "D(<40)": 15},
+            "top_30": emergency_top,
+            "sector_summary": {"科技": {"count": len(emergency_top), "avg_score": 50}},
+            "is_fresh": False,
+        }
+        with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(emergency_result, f, ensure_ascii=False, indent=2)
+        print(f"💾 紧急备用池已写入 {_CACHE_FILE}")
+        return emergency_result
 
     # V2.1: 按综合评分降序排列（动态权重）
     sorted_items = sorted(data.items(), key=lambda x: x[1].get("score", 0), reverse=True)
@@ -600,6 +651,7 @@ def run_discover(fast: bool = False, show_regime_only: bool = False) -> dict:
         "score_distribution": score_dist,
         "top_30": top_30,
         "sector_summary": sector_summary,
+        "is_fresh": True,
     }
 
     # 写文件
@@ -617,7 +669,24 @@ def main():
                         help="仅显示当前市场状态（不扫描股票）")
     args = parser.parse_args()
 
-    result = run_discover(fast=args.fast, show_regime_only=args.show_regime)
+    # 创建锁文件（防止并发运行）
+    import os as _os
+    lock_data = {"pid": _os.getpid(), "started_at": time.time()}
+    try:
+        with open(_LOCK_FILE, "w", encoding="utf-8") as lf:
+            json.dump(lock_data, lf)
+    except Exception:
+        pass  # 锁文件写入失败不阻塞主流程
+
+    try:
+        result = run_discover(fast=args.fast, show_regime_only=args.show_regime)
+    finally:
+        # 清理锁文件（无论如何都要清理）
+        try:
+            if _LOCK_FILE.exists():
+                _LOCK_FILE.unlink()
+        except Exception:
+            pass
 
     if args.show_regime:
         regime = result.get("regime", "neutral")
