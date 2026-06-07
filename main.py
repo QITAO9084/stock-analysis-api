@@ -2333,6 +2333,16 @@ def batch_analyze(symbols: str, market: str = "us"):
     lines.append(f"大盘环境：{mkt['name']} {mkt['index_price']}（近30日 {mkt.get('change_30d', 0):+.1f}%，"
                  f"{mkt.get('grade', '?')} → 评分乘数 ×{mkt['multiplier']}）")
     lines.append("⏱️ 信号有效期：3~5个交易日（此后需重新评估）")
+    # V5.39: 市场状态自适应 — 熊市自动降仓位上限
+    bear_market = mkt.get("multiplier", 1.0) <= 0.9
+    if bear_market:
+        lines.append("⚠️ 市场风险偏高（{}），总仓位上限降至 30%".format(mkt.get("grade", "偏弱")))
+        # 缩放所有仓位至 30% 上限
+        total_pos = sum(r.get("position_pct", 0) for r in results)
+        if total_pos > 30:
+            scale = 30.0 / total_pos
+            for r in results:
+                r["position_pct"] = round(r.get("position_pct", 0) * scale, 1)
     lines.append("")
 
     # 表头
