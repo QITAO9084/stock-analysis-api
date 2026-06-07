@@ -2628,7 +2628,7 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
         lines.append("⚠️ 大波动提醒（当日涨跌 >5%，请核实基本面原因）：")
         for r in big_move_stocks:
             chg = r.get("change_percent", 0) or 0
-            lines.append(f"    {r['symbol']} {r['name'][:15]}：{chg:+.1f}%，数据日期 {_data_date}")
+            lines.append(f"    {r['symbol']} {r['name'][:20]}：{chg:+.1f}%，数据日期 {_data_date}")
 
     # V2.1.12: 数据过期检测
     _stale, _stale_days, _stale_next = _is_data_stale(_data_date) if _data_date else (False, 0, "")
@@ -2683,7 +2683,7 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
         rank = f"#{show_rank}"
         name = r["name"][:20] if len(r["name"]) > 20 else r["name"]
         # V2.2.2: 表格内股票名截断至10字符，防止列溢出（emoji占1-2字符，留足空间）
-        table_name = r["name"][:10]
+        table_name = r["name"][:12]
         price = f"{r['current_price']:.2f}"
         chg = f"{r['change_percent']:+.1f}%" if r['change_percent'] else "0.0%"
         sig_cn = signal_map.get(r["signal"], r["signal"])
