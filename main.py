@@ -1666,9 +1666,9 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
     # 降级/排除警告
     warning_lines = []
     for d in rating_data.get("downgrades", []):
-        warning_lines.append(f"  WARNING 降级：{d}")
+        warning_lines.append(f"  降级：{d}")
     for e in rating_data.get("exclusions", []):
-        warning_lines.append(f"  FORBIDDEN 排除：{e}")
+        warning_lines.append(f"  禁止 排除：{e}")
     warning_text = "\n".join(warning_lines) if warning_lines else ""
 
     # 仓位建议文本
@@ -2463,7 +2463,7 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
         if len(members) >= 3:
             sig_cn = {"BUY": "买入", "STRONG_BUY": "强烈买入", "SELL": "卖出",
                       "STRONG_SELL": "强烈卖出", "NEUTRAL": "观望"}.get(sig, sig)
-            _cluster_lines.append(f"⚠️ {sig_cn}集群：{len(members)}只（{', '.join([m['symbol'] for m in members[:5]])}）信号一致")
+            _cluster_lines.append(f"⚠️ {sig_cn}集群：{len(members)}只（{', '.join([m['symbol'] for m in members[:8]])}{'…等' if len(members) > 8 else ''}）信号一致")
     if len(_rsi_low) >= 3:
         _cluster_lines.append(f"📉 RSI超卖集群：{', '.join(_rsi_low[:6])} RSI<40，短期反弹概率较大")
     if len(_rsi_high) >= 3:
