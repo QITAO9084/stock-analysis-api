@@ -2118,16 +2118,29 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
                 final_trade_point = "sell"
 
         # 信号列表
+        # V2.1.5: 检测信号方向与交易点方向是否相反，若相反则交换止损/止盈
+        tp_direction = trade_points.get("trade_point", "")
+        orig_signal = signal_data.get("signal", "")
+        _needs_swap = (
+            (tp_direction in ("sell", "strong_sell") and orig_signal in ("BUY", "STRONG_BUY"))
+            or (tp_direction in ("buy", "strong_buy") and orig_signal in ("SELL", "STRONG_SELL"))
+        )
+
         signals_list = list(signal_data["signals"]) if signal_data["signals"] else []
         rsi_delta_val = round(indicators["rsi_delta"], 2)
         if abs(rsi_delta_val) > 5:
             direction = "回落" if rsi_delta_val < 0 else "上升"
             signals_list.append(f"RSI短期{direction}{abs(rsi_delta_val):.1f}点，动能{'减弱' if rsi_delta_val < 0 else '增强'}")
 
-        # 盈亏比
+        # 盈亏比 — V2.1.5: 方向相反时交换止损/止盈
         entry_a = trade_points["entry_a"]
-        stop_loss_a = trade_points["stop_loss_a"]
-        take_profit_a = trade_points["take_profit_a"]
+        if _needs_swap:
+            # 信号方向与交易点方向相反 → 止损和止盈互换
+            stop_loss_a = trade_points["take_profit_a"]
+            take_profit_a = trade_points["stop_loss_a"]
+        else:
+            stop_loss_a = trade_points["stop_loss_a"]
+            take_profit_a = trade_points["take_profit_a"]
         if entry_a > 0 and stop_loss_a > 0:
             risk_a = abs(entry_a - stop_loss_a)
             reward_a = abs(take_profit_a - entry_a) if take_profit_a > 0 else 0
