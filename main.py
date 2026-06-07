@@ -43,7 +43,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.36.0"
+    version="5.37.0"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -2251,10 +2251,11 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
 @app.get("/batch/analyze", response_model=FormattedReportResponse)
 def batch_analyze(symbols: str, market: str = "us"):
     """
-    V5.33.25: 批量分析接口 — 一次扫多只股票，返回排名汇总表
+    V5.37.0: 批量分析接口 — 一次扫多只股票，返回排名汇总表（含趋势追踪📈📉）
 
     对每只股票跑完整 analyze2 逻辑（含信号评级+凯利仓位），
     按评分排名，输出紧凑汇总表。一次 Coze 工具调用扫 5-6 只。
+    V5.37: 自动对比上次扫描评分，标记趋势回升/走弱/延续。
 
     - **symbols**: 股票代码，逗号分隔（如 AAPL,MSFT,NVDA,AMD）
     - **market**: 市场（us/hk/cn），默认美股
@@ -2289,6 +2290,34 @@ def batch_analyze(symbols: str, market: str = "us"):
     # 按评分降序
     results.sort(key=lambda x: x["rating_score"], reverse=True)
 
+    # ===== V5.37: 趋势追踪 — 对比上次扫描评分 =====
+    prev_trend = _load_trend()
+    new_trend = {}
+    now_ts = beijing_now().strftime("%Y-%m-%d %H:%M")
+    for r in results:
+        sym = r["symbol"]
+        cur_score = r["rating_score"]
+        cur_price = r["current_price"]
+        prev = prev_trend.get(sym, {})
+        prev_score = prev.get("score", 0)
+        if prev_score and cur_score:
+            diff = cur_score - prev_score
+            if diff >= 3:
+                r["trend_marker"] = "📈"  # 趋势回升
+                r["trend_label"] = f"趋势回升 +{diff}"
+            elif diff <= -3:
+                r["trend_marker"] = "📉"  # 趋势走弱
+                r["trend_label"] = f"趋势走弱 {diff}"
+            else:
+                r["trend_marker"] = "➡️"
+                r["trend_label"] = f"趋势延续 ({diff:+d})"
+        else:
+            r["trend_marker"] = "🆕"
+            r["trend_label"] = "首次扫描"
+        new_trend[sym] = {"score": cur_score, "price": cur_price, "time": now_ts}
+    # 首次扫描提示
+    trend_has_data = len(prev_trend) > 0
+
     # ===== 构建格式化报告 =====
     buy_count = sum(1 for r in results if r["signal"] in ("BUY", "STRONG_BUY"))
     sell_count = sum(1 for r in results if r["signal"] in ("SELL", "STRONG_SELL"))
@@ -2309,7 +2338,7 @@ def batch_analyze(symbols: str, market: str = "us"):
     # 表头
     sep = "━" * 78
     lines.append(sep)
-    lines.append(f"{'排名':^4}│{'股票':^14}│{'现价':>10}│{'涨跌':>8}│{'信号':^6}│{'评级':^9}│{'评分':>5}│{'ADX':>6}│{'RSI':>5}│{'盈亏比':>6}│{'建议'}")
+    lines.append(f"{'排名':^4}│{'股票':^14}│{'现价':>10}│{'涨跌':>8}│{'信号':^6}│{'评级':^9}│{'评分+趋势':^8}│{'ADX':>6}│{'RSI':>5}│{'盈亏比':>6}│{'建议'}")
     lines.append(sep)
 
     signal_map = {"BUY": "买入", "STRONG_BUY": "强烈买入", "SELL": "卖出", "STRONG_SELL": "强烈卖出", "NEUTRAL": "观望"}
@@ -2339,7 +2368,7 @@ def batch_analyze(symbols: str, market: str = "us"):
         else:
             icon = "🔴"
 
-        lines.append(f"{rank:^4}│{icon}{name:<12}│{price:>10}│{chg:>8}│{sig_cn:^6}│{rating:^9}│{score:>5}│{adx_s:>6}│{rsi_s:>5}│{rr_s:>6}│{pos_str}")
+        lines.append(f"{rank:^4}│{icon}{name:<12}│{price:>10}│{chg:>8}│{sig_cn:^6}│{rating:^9}│{r['trend_marker']}{score:>3}│{adx_s:>6}│{rsi_s:>5}│{rr_s:>6}│{pos_str}")
 
     lines.append(sep)
     lines.append("")
@@ -2358,6 +2387,8 @@ def batch_analyze(symbols: str, market: str = "us"):
         lines.append(f"     现价 {r['current_price']:.2f} ({r['change_percent']:+.1f}%) | "
                      f"信号 {sig_display} | "
                      f"评级 {r['rating']}级 {r['rating_score']}/100")
+        if trend_has_data:
+            lines.append(f"     🕐 {r['trend_marker']} {r['trend_label']}（上次 {prev_trend.get(r['symbol'], {}).get('score', '?')}分 @ {prev_trend.get(r['symbol'], {}).get('time', '?')}）")
         lines.append(f"     ADX {r['adx']:.0f}（{r['adx_trend']}）| RSI {r['rsi']:.0f} | "
                      f"盈亏比 1:{r['rr_a']}" + (" ✅" if r['rr_a'] >= 1 else " ⚠️"))
         if r["key_signals_text"]:
@@ -2394,7 +2425,25 @@ def batch_analyze(symbols: str, market: str = "us"):
     lines.append("📐 仓位公式：基准=评分/100×20%，盈亏比<1:1仓位减半，>2:1×1.3，单票上限20%，总仓位≤60%")
     lines.append("")
 
+    # V5.37: 趋势汇总（仅在有历史数据时显示）
+    if trend_has_data:
+        up_count = sum(1 for r in results if r.get("trend_marker") == "📈")
+        down_count = sum(1 for r in results if r.get("trend_marker") == "📉")
+        steady_count = sum(1 for r in results if r.get("trend_marker") == "➡️")
+        lines.append("📊 趋势追踪：")
+        lines.append(f"   📈 回升 {up_count} 只 | 📉 走弱 {down_count} 只 | ➡️ 延续 {steady_count} 只")
+        # 列出明显变化的
+        big_movers = [r for r in results if r.get("trend_marker") in ("📈", "📉")]
+        if big_movers:
+            mover_text = " | ".join([f"{r['trend_marker']} {r['symbol']} {r['trend_label']}" for r in big_movers])
+            lines.append(f"   {mover_text}")
+        lines.append("")
+
     report = "\n".join(lines)
+
+    # 保存本次趋势数据
+    _save_trend(new_trend)
+
     return {"formatted_report": report}
 
 
@@ -2627,6 +2676,24 @@ def _load_portfolio() -> dict:
 def _save_portfolio(data: dict):
     """保存持仓状态文件"""
     with open(_PORTFOLIO_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+
+
+# ===== V5.37: 趋势追踪持久化（同一目录，复用 Volume） =====
+_TREND_FILE = _PORTFOLIO_FILE.parent / "stock_trend.json"
+
+
+def _load_trend() -> dict:
+    """加载趋势追踪文件，返回 {symbol: {score, price, time}}"""
+    if _TREND_FILE.exists():
+        with open(_TREND_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def _save_trend(data: dict):
+    """保存趋势追踪文件"""
+    with open(_TREND_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2, default=str)
 
 
