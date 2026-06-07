@@ -2657,15 +2657,18 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     lines.append("")
 
     # 表头（数据过时时简化：隐藏 ADX/RSI/盈亏比，这些指标已失效）
+    # V2.2.2: 动态计算分隔线长度，使分隔线与表头等宽
     if _stale:
-        _sep = "━" * 72
+        _header_line = f"{'排名':^4}│{'股票':^14}│{'现价':>10}│{'涨跌':>8}│{'信号':^6}│{'评级':^9}│{'评分+趋势':^10}│{'建议'}"
+        _sep = "━" * len(_header_line)
         lines.append(_sep)
-        lines.append(f"{'排名':^4}│{'股票':^14}│{'现价':>10}│{'涨跌':>8}│{'信号':^6}│{'评级':^9}│{'评分+趋势':^10}│{'建议'}")
+        lines.append(_header_line)
         lines.append(_sep)
     else:
-        _sep = "━" * 78
+        _header_line = f"{'排名':^4}│{'股票':^14}│{'现价':>10}│{'涨跌':>8}│{'信号':^6}│{'评级':^9}│{'评分+趋势':^8}│{'ADX':>6}│{'RSI':>5}│{'盈亏比':>6}│{'建议'}"
+        _sep = "━" * len(_header_line)
         lines.append(_sep)
-        lines.append(f"{'排名':^4}│{'股票':^14}│{'现价':>10}│{'涨跌':>8}│{'信号':^6}│{'评级':^9}│{'评分+趋势':^8}│{'ADX':>6}│{'RSI':>5}│{'盈亏比':>6}│{'建议'}")
+        lines.append(_header_line)
         lines.append(_sep)
 
     signal_map = {"BUY": "买入", "STRONG_BUY": "强烈买入", "SELL": "卖出", "STRONG_SELL": "强烈卖出", "NEUTRAL": "观望"}
@@ -2679,6 +2682,8 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
         show_rank += 1
         rank = f"#{show_rank}"
         name = r["name"][:20] if len(r["name"]) > 20 else r["name"]
+        # V2.2.2: 表格内股票名截断至10字符，防止列溢出（emoji占1-2字符，留足空间）
+        table_name = r["name"][:10]
         price = f"{r['current_price']:.2f}"
         chg = f"{r['change_percent']:+.1f}%" if r['change_percent'] else "0.0%"
         sig_cn = signal_map.get(r["signal"], r["signal"])
@@ -2706,9 +2711,9 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
             icon = "🔴"
 
         if _stale:
-            lines.append(f"{rank:^4}│{icon}{name:<12}│{price:>10}│{chg:>8}│{sig_cn:^6}│{rating:^9}│{r['trend_marker']}{score:>3}│{pos_str}")
+            lines.append(f"{rank:^4}│{icon}{table_name:<12}│{price:>10}│{chg:>8}│{sig_cn:^6}│{rating:^9}│{r['trend_marker']}{score:>3}│{pos_str}")
         else:
-            lines.append(f"{rank:^4}│{icon}{name:<12}│{price:>10}│{chg:>8}│{sig_cn:^6}│{rating:^9}│{r['trend_marker']}{score:>3}│{adx_s:>6}│{rsi_s:>5}│{rr_s:>6}│{pos_str}")
+            lines.append(f"{rank:^4}│{icon}{table_name:<12}│{price:>10}│{chg:>8}│{sig_cn:^6}│{rating:^9}│{r['trend_marker']}{score:>3}│{adx_s:>6}│{rsi_s:>5}│{rr_s:>6}│{pos_str}")
 
     lines.append(_sep)
 
