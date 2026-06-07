@@ -2300,6 +2300,7 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
             _SCRIPT_DIR = _Path(__file__).parent
             _DISCOVER_SCRIPT = _SCRIPT_DIR / "discover_pool.py"
             _LOCK_FILE = _SCRIPT_DIR / "stock_pool_dynamic.lock"
+            _COOLDOWN_FILE = _SCRIPT_DIR / "stock_pool_dynamic.cooldown"
 
             # 检查是否已有刷新在进行中
             if _LOCK_FILE.exists():
@@ -2313,7 +2314,6 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                             + "请等待刷新完成后再发送「6」查看结果。"
                         )}
                     else:
-                        # 锁超时（>120s），清理旧锁
                         _LOCK_FILE.unlink()
                 except Exception:
                     try:
@@ -2321,7 +2321,37 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                     except Exception:
                         pass
 
-            # 后台触发刷新（stderr 写入日志文件便于排查问题）
+            # V2.1.3: 刷新冷却机制（避免 yfinance 限流时反复触发空刷新）
+            # 如果 2 分钟内触发过刷新但缓存没更新 → 说明 yfinance 可能限流 → 返回旧数据
+            if _COOLDOWN_FILE.exists():
+                try:
+                    cooldown_age = time.time() - _COOLDOWN_FILE.stat().st_mtime
+                    if cooldown_age < 120:
+                        if pool_file.exists():
+                            try:
+                                with open(pool_file, "r", encoding="utf-8") as f:
+                                    stale_data = json.load(f)
+                                stale_data["is_fresh"] = False
+                                stale_data.setdefault("fallback_reason", "数据源限流，使用缓存")
+                                dynamic_symbols = [item["symbol"] for item in stale_data.get("top_30", [])]
+                                if dynamic_symbols:
+                                    need_refresh = False
+                                    # 标记为降级数据
+                                    stale_pool = stale_data
+                            except Exception:
+                                pass
+                    else:
+                        _COOLDOWN_FILE.unlink()
+                except Exception:
+                    pass
+
+            # 写入冷却标记
+            try:
+                _COOLDOWN_FILE.write_text(json.dumps({"ts": time.time()}), encoding="utf-8")
+            except Exception:
+                pass
+
+            # 后台触发刷新
             try:
                 subprocess.Popen(
                     [_sys.executable, str(_DISCOVER_SCRIPT)],
