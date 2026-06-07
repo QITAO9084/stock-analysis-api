@@ -2524,75 +2524,52 @@ def discover_stocks(limit: int = 30, force: bool = False):
     Coze 智能体可调用此端点更新动态池，然后调用 batch_analyze(pool="dynamic")。
 
     - **limit**: 返回 Top N 只（默认 30）
-    - **force**: True=重新计算，False=读缓存（1小时内有效）
+    - **force**: True=后台重新计算，False=读缓存（1小时内有效）
     """
+    from datetime import datetime, timedelta, timezone
+    BEIJING_TZ = timezone(timedelta(hours=8))
     pool_file = _TREND_FILE.parent / "stock_pool_dynamic.json"
+    now = datetime.now(BEIJING_TZ)
 
-    # 读缓存
-    if not force and pool_file.exists():
-        try:
-            with open(pool_file, "r", encoding="utf-8") as f:
-                cache = json.load(f)
-            updated = cache.get("updated", "")
-            # 1小时内有效
-            from datetime import datetime, timedelta, timezone
-            BEIJING_TZ = timezone(timedelta(hours=8))
-            now = datetime.now(BEIJING_TZ)
+    # -- force=False: 直接读缓存 --
+    if not force:
+        if pool_file.exists():
             try:
-                updated_dt = datetime.strptime(updated, "%Y-%m-%d %H:%M").replace(tzinfo=BEIJING_TZ)
-                if (now - updated_dt) < timedelta(hours=1):
-                    top = cache.get("top_30", [])[:limit]
-                    return {
-                        "formatted_report": (
-                            f"📊 动态池缓存（{updated}）\n"
-                            f"扫描 {cache.get('total_scanned', '?')} 只 | 返回 Top {len(top)}\n"
-                            + "\n".join([f"  #{i+1} {t['symbol']:5s} {t['change_pct_5d']:+.1f}% RSI={t['rsi']}" for i, t in enumerate(top)])
-                        )
-                    }
+                with open(pool_file, "r", encoding="utf-8") as f:
+                    cache = json.load(f)
+                top = cache.get("top_30", [])[:limit]
+                updated = cache.get("updated", "?")
+                return {
+                    "formatted_report": (
+                        "📊 动态池缓存（" + updated + "）\n"
+                        "扫描 " + str(cache.get("total_scanned", "?")) + " 只 | 返回 Top " + str(len(top)) + "\n"
+                        + "\n".join(["  #" + str(i+1) + " " + t["symbol"] + " " + ("+" if t["change_pct_5d"] >= 0 else "") + str(round(t["change_pct_5d"], 1)) + "% RSI=" + str(t["rsi"]) for i, t in enumerate(top)])
+                    )
+                }
             except Exception:
                 pass
-        except Exception:
-            pass
+        return {"formatted_report": "📊 动态池尚未生成，请发送「7」或「刷新」触发更新。"}
 
-    # 重新计算（调用 discover_pool.py 的逻辑）
+    # -- force=True: 后台运行，立刻返回 --
     try:
         import subprocess, sys as _sys
         from pathlib import Path as _Path
         _SCRIPT_DIR = _Path(__file__).parent
         _DISCOVER_SCRIPT = _SCRIPT_DIR / "discover_pool.py"
-        # API 层已管理缓存（上方 cache 检查），此处直接全量扫描
-        result = subprocess.run(
+        # 后台运行，不等待完成（避免 Coze 超时重试）
+        subprocess.Popen(
             [_sys.executable, str(_DISCOVER_SCRIPT)],
-            capture_output=True, text=True, timeout=120,
-            cwd=str(_SCRIPT_DIR)
+            cwd=str(_SCRIPT_DIR),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
-        if result.returncode != 0:
-            return {"formatted_report": f"⚠️ discover_pool.py 执行失败：{result.stderr[:200]}"}
+        return {"formatted_report": (
+            "📊 动态池刷新已触发，正在后台扫描 100 只美股（约需 60 秒）。\n"
+            "请 1 分钟后再发送「7」查看最新结果，或直接发送「6」分析当前动态池。"
+        )}
     except Exception as e:
-        return {"formatted_report": f"⚠️ 调用 discover_pool.py 失败：{str(e)}"}
-
-    if not pool_file.exists():
-        return {"formatted_report": "⚠️ 动态池生成失败，请检查日志。"}
-
-    with open(pool_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    top = data.get("top_30", [])[:limit]
-    sector_sum = data.get("sector_summary", {})
-
-    lines = [
-        f"📊 动态池更新完成（{data.get('updated', '?')}）",
-        f"扫描 {data.get('total_scanned', '?')} 只 | 返回 Top {len(top)}",
-        "",
-    ]
-    for i, t in enumerate(top):
-        lines.append(f"  #{i+1} {t['symbol']:5s} {t['change_pct_5d']:+.1f}% RSI={t['rsi']} ({t['sector']})")
-    lines += ["", "📋 行业分布："]
-    for sec, cnt in list(sector_sum.items())[:8]:
-        lines.append(f"  {sec}：{cnt} 只")
-    lines += ["", f"💡 使用方式：batch_analyze(symbols='', pool='dynamic')"]
-
-    return {"formatted_report": "\n".join(lines)}
-
+        return {"formatted_report": "⚠️ 触发刷新失败：" + str(e)}
 
 # ==================== V5.26: 多股持仓面板 ====================
 
