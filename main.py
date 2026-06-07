@@ -2460,6 +2460,8 @@ def batch_analyze(symbols: str, market: str = "us"):
 
     # V5.34: 仓位公式备注
     lines.append("📐 仓位公式：基准=评分/100×20%，盈亏比<1:1仓位减半，>2:1×1.3，单票上限20%，总仓位≤60%")
+    lines.append("📝 止损/止盈依据：")
+    lines.append("   方案A止损=关键支撑（MA20/MA50/近20日低点）下方1-2%，止盈=3倍ATR或近20日高点上方1-3%")
     lines.append("")
 
     # V5.37: 趋势汇总（仅在有历史数据时显示）
