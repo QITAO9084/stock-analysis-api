@@ -2502,6 +2502,11 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                 # V2.1.7: 数据未更新（周末/休市）→ 不显示"趋势延续"
                 r["trend_marker"] = "🆕"
                 r["trend_label"] = "数据未更新"
+            elif _data_date and _data_date < beijing_now().strftime("%Y-%m-%d"):
+                # V2.1.8: 兜底——数据日期早于今天，scores 又相同 → 数据未更新
+                # 兼容 V2.1.7 首次运行（prev_actual 为空）的情况
+                r["trend_marker"] = "🆕"
+                r["trend_label"] = "数据未更新"
             else:
                 r["trend_marker"] = "➡️"
                 r["trend_label"] = f"趋势延续 ({diff:+d})"
