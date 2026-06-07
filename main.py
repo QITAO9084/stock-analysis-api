@@ -2283,10 +2283,14 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                 with open(pool_file, "r", encoding="utf-8") as f:
                     pool_data = json.load(f)
                 updated = pool_data.get("updated", "")
-                updated_dt = datetime.strptime(updated, "%Y-%m-%d %H:%M").replace(tzinfo=BEIJING_TZ)
-                if (now - updated_dt) < timedelta(hours=1):
-                    need_refresh = False
-                    dynamic_symbols = [item["symbol"] for item in pool_data.get("top_30", [])]
+                # V2.1.2: 健壮解析时间戳（兼容带额外文字的旧缓存，如 "2026-06-07 17:56 (stale)")
+                import re
+                m = re.match(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", updated)
+                if m:
+                    updated_dt = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M").replace(tzinfo=BEIJING_TZ)
+                    if (now - updated_dt) < timedelta(hours=1):
+                        need_refresh = False
+                        dynamic_symbols = [item["symbol"] for item in pool_data.get("top_30", [])]
             except Exception:
                 pass
 

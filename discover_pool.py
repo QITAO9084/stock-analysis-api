@@ -541,9 +541,11 @@ def run_discover(fast: bool = False, show_regime_only: bool = False) -> dict:
                     old_cache = json.load(f)
                 old_updated = old_cache.get("updated", "?")
                 print(f"📦 降级：使用旧缓存（{old_updated}），标记为 stale")
-                old_cache["updated"] = beijing_now().strftime("%Y-%m-%d %H:%M") + " (stale, 数据源限流)"
+                # 写干净的时间戳（避免 batch_analyze strptime 解析失败）
+                old_cache["updated"] = beijing_now().strftime("%Y-%m-%d %H:%M")
                 old_cache["is_fresh"] = False
-                # 重新写回（更新时间戳）
+                old_cache["fallback_reason"] = "yfinance限流，使用旧缓存"
+                # 重新写回
                 with open(_CACHE_FILE, "w", encoding="utf-8") as f:
                     json.dump(old_cache, f, ensure_ascii=False, indent=2)
                 return old_cache
@@ -575,12 +577,13 @@ def run_discover(fast: bool = False, show_regime_only: bool = False) -> dict:
             "regime": regime,
             "regime_cn": {"bull": "🐂 牛市", "neutral": "📊 震荡", "bear": "🐻 熊市"}.get(regime, regime),
             "weights": WEIGHT_MATRIX[regime],
-            "updated": beijing_now().strftime("%Y-%m-%d %H:%M") + " (紧急备用池, yfinance限流)",
+            "updated": beijing_now().strftime("%Y-%m-%d %H:%M"),
             "total_scanned": 0,
             "score_distribution": {"A(>=70)": 0, "B(55-69)": 0, "C(40-54)": 0, "D(<40)": 15},
             "top_30": emergency_top,
             "sector_summary": {"科技": {"count": len(emergency_top), "avg_score": 50}},
             "is_fresh": False,
+            "fallback_reason": "yfinance限流，使用紧急备用池",
         }
         with open(_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(emergency_result, f, ensure_ascii=False, indent=2)
