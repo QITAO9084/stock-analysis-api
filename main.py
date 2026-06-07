@@ -2621,6 +2621,15 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     lines.append(f"大盘环境：{mkt['name']} {mkt['index_price']}（近30日 {mkt.get('change_30d', 0):+.1f}%，"
                  f"{mkt.get('grade', '?')} → 评分乘数 ×{mkt['multiplier']}）")
 
+    # V2.2.0: 大波动提醒（数据过期时详细摘要被跳过，需在此处显示）
+    big_move_stocks = [r for r in results if abs(r.get("change_percent", 0) or 0) > 5]
+    if big_move_stocks:
+        lines.append("")
+        lines.append("⚠️ 大波动提醒（当日涨跌 >5%，请核实基本面原因）：")
+        for r in big_move_stocks:
+            chg = r.get("change_percent", 0) or 0
+            lines.append(f"    {r['symbol']} {r['name'][:15]}：{chg:+.1f}%，数据日期 {_data_date}")
+
     # V2.1.12: 数据过期检测
     _stale, _stale_days, _stale_next = _is_data_stale(_data_date) if _data_date else (False, 0, "")
     if _stale:
@@ -2647,11 +2656,17 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                 r["position_pct"] = round(r.get("position_pct", 0) * scale, 1)
     lines.append("")
 
-    # 表头
-    sep = "━" * 78
-    lines.append(sep)
-    lines.append(f"{'排名':^4}│{'股票':^14}│{'现价':>10}│{'涨跌':>8}│{'信号':^6}│{'评级':^9}│{'评分+趋势':^8}│{'ADX':>6}│{'RSI':>5}│{'盈亏比':>6}│{'建议'}")
-    lines.append(sep)
+    # 表头（数据过时时简化：隐藏 ADX/RSI/盈亏比，这些指标已失效）
+    if _stale:
+        _sep = "━" * 72
+        lines.append(_sep)
+        lines.append(f"{'排名':^4}│{'股票':^14}│{'现价':>10}│{'涨跌':>8}│{'信号':^6}│{'评级':^9}│{'评分+趋势':^10}│{'建议'}")
+        lines.append(_sep)
+    else:
+        _sep = "━" * 78
+        lines.append(_sep)
+        lines.append(f"{'排名':^4}│{'股票':^14}│{'现价':>10}│{'涨跌':>8}│{'信号':^6}│{'评级':^9}│{'评分+趋势':^8}│{'ADX':>6}│{'RSI':>5}│{'盈亏比':>6}│{'建议'}")
+        lines.append(_sep)
 
     signal_map = {"BUY": "买入", "STRONG_BUY": "强烈买入", "SELL": "卖出", "STRONG_SELL": "强烈卖出", "NEUTRAL": "观望"}
 
@@ -2690,9 +2705,12 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
         else:
             icon = "🔴"
 
-        lines.append(f"{rank:^4}│{icon}{name:<12}│{price:>10}│{chg:>8}│{sig_cn:^6}│{rating:^9}│{r['trend_marker']}{score:>3}│{adx_s:>6}│{rsi_s:>5}│{rr_s:>6}│{pos_str}")
+        if _stale:
+            lines.append(f"{rank:^4}│{icon}{name:<12}│{price:>10}│{chg:>8}│{sig_cn:^6}│{rating:^9}│{r['trend_marker']}{score:>3}│{pos_str}")
+        else:
+            lines.append(f"{rank:^4}│{icon}{name:<12}│{price:>10}│{chg:>8}│{sig_cn:^6}│{rating:^9}│{r['trend_marker']}{score:>3}│{adx_s:>6}│{rsi_s:>5}│{rr_s:>6}│{pos_str}")
 
-    lines.append(sep)
+    lines.append(_sep)
 
     # V2.2.0: D级汇总（一行代替逐行展示）
     if d_grade_results:
