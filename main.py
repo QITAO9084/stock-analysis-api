@@ -18,6 +18,42 @@ def beijing_now():
     """返回北京时间当前时刻"""
     return datetime.now(BEIJING_TZ)
 
+
+def get_data_date_str(market="us"):
+    """返回数据日期标注字符串，处理周末/非交易时段。
+    - 周末 → 显示上周五收盘日期
+    - 工作日 → 显示今日（盘中）或昨日收盘
+    """
+    now = beijing_now()
+    wd = now.weekday()  # 周一=0 ... 周日=6
+    market_name = {"us": "美股", "hk": "港股", "cn": "A股"}.get(market.lower(), market)
+
+    # 周末：回溯到上周五
+    if wd == 5:  # 周六
+        last_trade = now - timedelta(days=1)
+        weekday_cn = "周五"
+        return f"📅 数据日期：{last_trade.strftime('%Y-%m-%d')}（{weekday_cn}收盘，{market_name}休市）"
+    if wd == 6:  # 周日
+        last_trade = now - timedelta(days=2)
+        weekday_cn = "周五"
+        return f"📅 数据日期：{last_trade.strftime('%Y-%m-%d')}（{weekday_cn}收盘，{market_name}休市）"
+
+    # 工作日：简化判断（精准判断需转换时区，此处用日期标注足以消除误解）
+    # 尝试从 stock_pool_dynamic.json 读取 actual_date 字段
+    try:
+        from pathlib import Path
+        _cache = Path(__file__).parent / "stock_pool_dynamic.json"
+        if _cache.exists():
+            import json
+            _d = json.loads(_cache.read_text(encoding="utf-8"))
+            actual = _d.get("actual_date", "")
+            if actual:
+                return f"📅 数据日期：{actual}（{market_name}收盘/盘中）"
+    except Exception:
+        pass
+
+    return f"📅 数据日期：{now.strftime('%Y-%m-%d')}（{market_name}盘中/昨日收盘）"
+
 class PortfolioOpenRequest(BaseModel):
     symbol: str
     entry_price: float = 0
@@ -2468,6 +2504,8 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     lines.append(f"大盘环境：{mkt['name']} {mkt['index_price']}（近30日 {mkt.get('change_30d', 0):+.1f}%，"
                  f"{mkt.get('grade', '?')} → 评分乘数 ×{mkt['multiplier']}）")
     lines.append("⏱️ 信号有效期：3~5个交易日（此后需重新评估）")
+    # V2.1.6: 数据日期标注（周末/非交易时段提示）
+    lines.append(get_data_date_str(market))
     # V5.39: 市场状态自适应 — 熊市自动降仓位上限
     bear_market = mkt.get("multiplier", 1.0) <= 0.9
     if bear_market:

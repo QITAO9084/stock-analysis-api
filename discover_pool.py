@@ -527,6 +527,16 @@ def run_discover(fast: bool = False, show_regime_only: bool = False) -> dict:
     print(f"🔍 开始扫描 {len(ALL_100)} 只美股（V2.1 动态权重）...")
     print(f"⏳ 预计耗时 60-90 秒（下载 1mo 日线 + 指标计算）")
 
+    # V2.1.6: 计算实际数据日期（周末回溯到上周五）
+    now_date = beijing_now()
+    wd = now_date.weekday()
+    if wd == 5:   # 周六
+        actual_date = (now_date - timedelta(days=1)).strftime("%Y-%m-%d")
+    elif wd == 6: # 周日
+        actual_date = (now_date - timedelta(days=2)).strftime("%Y-%m-%d")
+    else:
+        actual_date = now_date.strftime("%Y-%m-%d")
+
     t0 = time.time()
     data = fetch_batch(ALL_100, regime=regime)
     elapsed = time.time() - t0
@@ -579,6 +589,7 @@ def run_discover(fast: bool = False, show_regime_only: bool = False) -> dict:
             "regime_cn": {"bull": "🐂 牛市", "neutral": "📊 震荡", "bear": "🐻 熊市"}.get(regime, regime),
             "weights": WEIGHT_MATRIX[regime],
             "updated": beijing_now().strftime("%Y-%m-%d %H:%M"),
+            "actual_date": actual_date,
             "total_scanned": 0,
             "score_distribution": {"A(>=70)": 0, "B(55-69)": 0, "C(40-54)": 0, "D(<40)": 15},
             "top_30": emergency_top,
@@ -651,6 +662,7 @@ def run_discover(fast: bool = False, show_regime_only: bool = False) -> dict:
         "regime_cn": regime_cn_map.get(regime, regime),
         "weights": WEIGHT_MATRIX[regime],
         "updated": beijing_now().strftime("%Y-%m-%d %H:%M"),
+        "actual_date": actual_date,
         "total_scanned": len(data),
         "score_distribution": score_dist,
         "top_30": top_30,
