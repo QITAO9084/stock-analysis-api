@@ -2493,6 +2493,19 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                 _data_date = _pool_data.get("actual_date", "")
     except Exception:
         pass
+    # V2.1.11: pool 缓存可能缺少 actual_date（旧缓存/降级数据），
+    # 兜底用美东时间计算（与 get_data_date_str() 保持一致）
+    if not _data_date:
+        try:
+            from zoneinfo import ZoneInfo
+            _us = datetime.now(ZoneInfo("America/New_York"))
+        except Exception:
+            _us = beijing_now() - timedelta(hours=13)
+        _wd = _us.weekday()
+        if _wd >= 5:
+            _data_date = (_us.date() - timedelta(days=_wd - 4)).strftime("%Y-%m-%d")
+        else:
+            _data_date = _us.strftime("%Y-%m-%d")
     for r in results:
         sym = r["symbol"]
         cur_score = r["rating_score"]
