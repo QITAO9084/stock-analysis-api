@@ -2263,6 +2263,13 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     - **market**: 市场（us/hk/cn），默认美股
     - **pool**: "default"=固定池, "dynamic"=读取 stock_pool_dynamic.json
     """
+    # V5.40.3: 参数兜底 — 模型常把参数填错，后端自动修正
+    if not symbols or symbols.strip() == "":
+        pool = "dynamic"
+    if market and str(market).lower() == "dynamic":
+        pool = "dynamic"
+        market = "us"
+
     # V5.40.2: 动态池模式（自动后台刷新，不再需要 Coze 单独调 discover_stocks）
     if pool == "dynamic":
         from datetime import datetime, timedelta, timezone
@@ -2308,9 +2315,6 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
             return {"formatted_report": "⚠️ 动态池为空，刷新中，请稍后重试。"}
         symbols = ",".join(dynamic_symbols[:15])
         print(f"[batch_analyze] 动态池模式：使用 {len(dynamic_symbols[:15])} 只股票")
-
-    if not symbols or symbols.strip() == "":
-        return {"formatted_report": "⚠️ 请提供股票代码（symbols 参数），或设置 pool=dynamic。"}
 
     if market == "auto" or not market:
         market = "us"
