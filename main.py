@@ -2557,7 +2557,8 @@ def discover_stocks(limit: int = 30, force: bool = False):
     # 重新计算（调用 discover_pool.py 的逻辑）
     try:
         import subprocess, sys as _sys
-        _SCRIPT_DIR = Path(__file__).parent
+        from pathlib import Path as _Path
+        _SCRIPT_DIR = _Path(__file__).parent
         _DISCOVER_SCRIPT = _SCRIPT_DIR / "discover_pool.py"
         # API 层已管理缓存（上方 cache 检查），此处直接全量扫描
         result = subprocess.run(
