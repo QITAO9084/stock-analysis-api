@@ -2557,10 +2557,13 @@ def discover_stocks(limit: int = 30, force: bool = False):
     # 重新计算（调用 discover_pool.py 的逻辑）
     try:
         import subprocess, sys as _sys
+        _SCRIPT_DIR = Path(__file__).parent
+        _DISCOVER_SCRIPT = _SCRIPT_DIR / "discover_pool.py"
+        # API 层已管理缓存（上方 cache 检查），此处直接全量扫描
         result = subprocess.run(
-            [_sys.executable, "discover_pool.py", "--fast"],
+            [_sys.executable, str(_DISCOVER_SCRIPT)],
             capture_output=True, text=True, timeout=120,
-            cwd=str(_TREND_FILE.parent)
+            cwd=str(_SCRIPT_DIR)
         )
         if result.returncode != 0:
             return {"formatted_report": f"⚠️ discover_pool.py 执行失败：{result.stderr[:200]}"}
