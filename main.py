@@ -2249,19 +2249,41 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
 
 
 @app.get("/batch/analyze", response_model=FormattedReportResponse)
-def batch_analyze(symbols: str, market: str = "us"):
+def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     """
-    V5.37.0: 批量分析接口 — 一次扫多只股票，返回排名汇总表（含趋势追踪📈📉）
+    V5.40: 批量分析接口 — 一次扫多只股票，返回排名汇总表（含趋势追踪📈📉）
 
     对每只股票跑完整 analyze2 逻辑（含信号评级+凯利仓位），
     按评分排名，输出紧凑汇总表。一次 Coze 工具调用扫 5-6 只。
     V5.37: 自动对比上次扫描评分，标记趋势回升/走弱/延续。
+    V5.40: 支持 pool=dynamic 读取动态池（由 discover_pool.py 生成）。
 
     - **symbols**: 股票代码，逗号分隔（如 AAPL,MSFT,NVDA,AMD）
+                 为空且 pool="default" 时使用内置默认池（15只）
     - **market**: 市场（us/hk/cn），默认美股
+    - **pool**: "default"=固定池, "dynamic"=读取 stock_pool_dynamic.json
     """
+    # V5.40: 动态池模式
+    if pool == "dynamic":
+        pool_file = _TREND_FILE.parent / "stock_pool_dynamic.json"
+        if not pool_file.exists():
+            return {"formatted_report": (
+                "⚠️ 动态池文件不存在，请先运行 discover_pool.py 生成。\n"
+                "   或访问 /stock/discover 端点立即生成。"
+            )}
+        try:
+            with open(pool_file, "r", encoding="utf-8") as f:
+                pool_data = json.load(f)
+            dynamic_symbols = [item["symbol"] for item in pool_data.get("top_30", [])]
+            if not dynamic_symbols:
+                return {"formatted_report": "⚠️ 动态池为空，请重新运行 discover_pool.py。"}
+            symbols = ",".join(dynamic_symbols[:15])  # 最多取前15只
+            print(f"[batch_analyze] 动态池模式：使用 {len(dynamic_symbols[:15])} 只股票")
+        except Exception as e:
+            return {"formatted_report": f"⚠️ 读取动态池失败：{str(e)}"}
+
     if not symbols or symbols.strip() == "":
-        return {"formatted_report": "⚠️ 请提供股票代码，逗号分隔。例如：AAPL,MSFT,NVDA,AMD"}
+        return {"formatted_report": "⚠️ 请提供股票代码（symbols 参数），或设置 pool=dynamic。"}
 
     if market == "auto" or not market:
         market = "us"
@@ -2491,6 +2513,81 @@ def batch_analyze(symbols: str, market: str = "us"):
     _save_trend(new_trend)
 
     return {"formatted_report": report}
+
+
+# ==================== V5.40: 动态池发现 ====================
+
+@app.get("/stock/discover")
+def discover_stocks(limit: int = 30, force: bool = False):
+    """
+    动态发现强势美股，结果缓存到 stock_pool_dynamic.json。
+    Coze 智能体可调用此端点更新动态池，然后调用 batch_analyze(pool="dynamic")。
+
+    - **limit**: 返回 Top N 只（默认 30）
+    - **force**: True=重新计算，False=读缓存（1小时内有效）
+    """
+    pool_file = _TREND_FILE.parent / "stock_pool_dynamic.json"
+
+    # 读缓存
+    if not force and pool_file.exists():
+        try:
+            with open(pool_file, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+            updated = cache.get("updated", "")
+            # 1小时内有效
+            from datetime import datetime, timedelta, timezone
+            BEIJING_TZ = timezone(timedelta(hours=8))
+            now = datetime.now(BEIJING_TZ)
+            try:
+                updated_dt = datetime.strptime(updated, "%Y-%m-%d %H:%M").replace(tzinfo=BEIJING_TZ)
+                if (now - updated_dt) < timedelta(hours=1):
+                    top = cache.get("top_30", [])[:limit]
+                    return {
+                        "formatted_report": (
+                            f"📊 动态池缓存（{updated}）\n"
+                            f"扫描 {cache.get('total_scanned', '?')} 只 | 返回 Top {len(top)}\n"
+                            + "\n".join([f"  #{i+1} {t['symbol']:5s} {t['change_pct_5d']:+.1f}% RSI={t['rsi']}" for i, t in enumerate(top)])
+                        )
+                    }
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    # 重新计算（调用 discover_pool.py 的逻辑）
+    try:
+        import subprocess, sys as _sys
+        result = subprocess.run(
+            [_sys.executable, "discover_pool.py", "--fast"],
+            capture_output=True, text=True, timeout=120,
+            cwd=str(_TREND_FILE.parent)
+        )
+        if result.returncode != 0:
+            return {"formatted_report": f"⚠️ discover_pool.py 执行失败：{result.stderr[:200]}"}
+    except Exception as e:
+        return {"formatted_report": f"⚠️ 调用 discover_pool.py 失败：{str(e)}"}
+
+    if not pool_file.exists():
+        return {"formatted_report": "⚠️ 动态池生成失败，请检查日志。"}
+
+    with open(pool_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    top = data.get("top_30", [])[:limit]
+    sector_sum = data.get("sector_summary", {})
+
+    lines = [
+        f"📊 动态池更新完成（{data.get('updated', '?')}）",
+        f"扫描 {data.get('total_scanned', '?')} 只 | 返回 Top {len(top)}",
+        "",
+    ]
+    for i, t in enumerate(top):
+        lines.append(f"  #{i+1} {t['symbol']:5s} {t['change_pct_5d']:+.1f}% RSI={t['rsi']} ({t['sector']})")
+    lines += ["", "📋 行业分布："]
+    for sec, cnt in list(sector_sum.items())[:8]:
+        lines.append(f"  {sec}：{cnt} 只")
+    lines += ["", f"💡 使用方式：batch_analyze(symbols='', pool='dynamic')"]
+
+    return {"formatted_report": "\n".join(lines)}
 
 
 # ==================== V5.26: 多股持仓面板 ====================
