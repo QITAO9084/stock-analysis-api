@@ -10,6 +10,7 @@ import sys
 import os as _os
 import uuid as _uuid
 from pydantic import BaseModel
+from pathlib import Path
 
 # ===== 北京时间辅助函数（Railway服务器UTC，+8小时）=====
 BEIJING_TZ = timezone(timedelta(hours=8))
