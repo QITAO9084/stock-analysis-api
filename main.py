@@ -2331,7 +2331,7 @@ def batch_analyze(symbols: str, market: str = "us"):
                  f"{' | 失败 ' + str(len(failed)) + ' 只: ' + ','.join(failed) if failed else ''}")
     lines.append(f"多头 {buy_count} | 空头 {sell_count} | 中性 {neutral_count}")
     lines.append(f"大盘环境：{mkt['name']} {mkt['index_price']}（近30日 {mkt.get('change_30d', 0):+.1f}%，"
-                 f"{'强势多头' if mkt['multiplier'] > 1.0 else '偏弱'} → 评分乘数 ×{mkt['multiplier']}）")
+                 f"{mkt.get('grade', '?')} → 评分乘数 ×{mkt['multiplier']}）")
     lines.append("⏱️ 信号有效期：3~5个交易日（此后需重新评估）")
     lines.append("")
 
@@ -2376,6 +2376,43 @@ def batch_analyze(symbols: str, market: str = "us"):
     # 详细摘要
     lines.append("📊 详细摘要：")
     lines.append("")
+
+    # V5.38: 共性信号汇总（减少重复描述）
+    _signal_groups = {}
+    _rsi_low = []   # RSI < 40 的超卖集群
+    _rsi_high = []  # RSI > 60 的超买集群
+    _boll_touch = []  # 触及布林带下轨
+    for r in results:
+        sig = r["signal"]
+        if sig not in _signal_groups:
+            _signal_groups[sig] = []
+        _signal_groups[sig].append(r)
+        if r.get("rsi", 50) < 40:
+            _rsi_low.append(r["symbol"])
+        if r.get("rsi", 50) > 60:
+            _rsi_high.append(r["symbol"])
+        if "触及布林带下轨" in (r.get("key_signals_text", "") or ""):
+            _boll_touch.append(r["symbol"])
+
+    # 输出共性提示（仅当有3只以上共性时）
+    _cluster_lines = []
+    for sig, members in _signal_groups.items():
+        if len(members) >= 3:
+            sig_cn = {"BUY": "买入", "STRONG_BUY": "强烈买入", "SELL": "卖出",
+                      "STRONG_SELL": "强烈卖出", "NEUTRAL": "观望"}.get(sig, sig)
+            _cluster_lines.append(f"⚠️ {sig_cn}集群：{len(members)}只（{', '.join([m['symbol'] for m in members[:5]])}）信号一致")
+    if len(_rsi_low) >= 3:
+        _cluster_lines.append(f"📉 RSI超卖集群：{', '.join(_rsi_low[:6])} RSI<40，短期反弹概率较大")
+    if len(_rsi_high) >= 3:
+        _cluster_lines.append(f"📈 RSI超买集群：{', '.join(_rsi_high[:6])} RSI>60，注意回调风险")
+    if len(_boll_touch) >= 3:
+        _cluster_lines.append(f"📊 布林带下轨触及：{', '.join(_boll_touch[:6])} 超卖")
+    if _cluster_lines:
+        lines.append("  📋 共性信号汇总：")
+        for _cl in _cluster_lines:
+            lines.append(f"    {_cl}")
+        lines.append("")
+
     for i, r in enumerate(results):
         icon = "🟢" if r["rating"] == "A" else "🔵" if r["rating"] == "B" else "🟡" if r["rating"] == "C" else "🔴"
         lines.append(f"  #{i+1} {icon} {r['name']}（{r['symbol']}）")
