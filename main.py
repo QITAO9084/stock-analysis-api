@@ -2473,8 +2473,9 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     new_trend = {}
     now_ts = beijing_now().strftime("%Y-%m-%d %H:%M")
 
-    # V2.1.7: 读取 actual_date 用于判断数据是否更新（周末休市时数据不变）
-    _pool_path = _TREND_FILE.parent / "stock_pool_dynamic.json"
+    # V2.1.9: 直接读应用目录的 pool 文件（不用 _TREND_FILE.parent，
+    # 因为 Railway 上 PORTFOLIO_PATH 改写后路径不同）
+    _pool_path = Path(__file__).parent / "stock_pool_dynamic.json"
     _data_date = ""
     try:
         if _pool_path.exists():
