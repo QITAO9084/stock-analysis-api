@@ -28,9 +28,15 @@ def get_data_date_str(market="us"):
     market_name = {"us": "美股", "hk": "港股", "cn": "A股"}.get(market.lower(), market)
 
     # 优先用缓存中的 actual_date（discover_pool.py 已用美东时间计算）
+    # V2.1.10: 先读持久化目录（和 discover_pool.py 一致），再 fallback 应用目录
     try:
         from pathlib import Path
-        _cache = Path(__file__).parent / "stock_pool_dynamic.json"
+        import os as _os_pool
+        _pd = _os_pool.environ.get("PORTFOLIO_DIR") or _os_pool.environ.get("PORTFOLIO_PATH")
+        if _pd:
+            _cache = Path(_pd) / "stock_pool_dynamic.json"
+        else:
+            _cache = Path(__file__).parent / "stock_pool_dynamic.json"
         if _cache.exists():
             import json
             _d = json.loads(_cache.read_text(encoding="utf-8"))
@@ -2474,9 +2480,11 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     new_trend = {}
     now_ts = beijing_now().strftime("%Y-%m-%d %H:%M")
 
-    # V2.1.9: 直接读应用目录的 pool 文件（不用 _TREND_FILE.parent，
-    # 因为 Railway 上 PORTFOLIO_PATH 改写后路径不同）
-    _pool_path = Path(__file__).parent / "stock_pool_dynamic.json"
+    # V2.1.10: 和 discover_pool.py 保持一致，先读持久化目录（PORTFOLIO_PATH），
+    # 再 fallback 到应用目录（本地开发时）
+    _pool_path = _PORTFOLIO_FILE.parent / "stock_pool_dynamic.json"
+    if not _pool_path.exists():
+        _pool_path = Path(__file__).parent / "stock_pool_dynamic.json"
     _data_date = ""
     try:
         if _pool_path.exists():
