@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>4因子评分体系回测报告 V2.0</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e0e0e0; padding: 24px; }
+h1 { font-size: 22px; margin-bottom: 4px; }
+.subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+.card { background: #1a1d2b; border-radius: 12px; padding: 20px; margin-bottom: 20px; border: 1px solid #2a2d3a; }
+.card h2 { font-size: 15px; color: #aaa; margin-bottom: 16px; }
+.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.stat { background: #161822; border-radius: 8px; padding: 14px; text-align: center; }
+.stat .value { font-size: 24px; font-weight: 700; }
+.stat .label { font-size: 11px; color: #888; margin-top: 4px; }
+.positive { color: #ff4444; }
+.negative { color: #00cc66; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 10px 12px; text-align: right; border-bottom: 1px solid #2a2d3a; }
+th { color: #888; font-weight: 500; }
+td:first-child, th:first-child { text-align: left; }
+.highlight { background: rgba(255,68,68,0.05); }
+.conclusion { padding: 16px; border-radius: 8px; margin-top: 16px; }
+.conclusion.valid { background: rgba(0,204,102,0.08); border: 1px solid rgba(0,204,102,0.2); }
+.conclusion.warn { background: rgba(255,170,0,0.08); border: 1px solid rgba(255,170,0,0.2); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px; }
+.badge.synthetic { background: rgba(255,170,0,0.15); color: #fa0; }
+.badge.real { background: rgba(0,204,102,0.15); color: #0c6; }
+</style>
+</head>
+<body>
+<h1>📊 4因子评分体系回测报告
+  <span class="badge synthetic">🧪 合成验证</span>
+</h1>
+<p class="subtitle">V2.0 算法：涨幅 20% + RSI 30% + ADX 30% + 均线排列 20%</p>
+
+<div class="card">
+  <h2>📈 概述</h2>
+  <div class="stats-grid">
+    <div class="stat">
+      <div class="value">47</div>
+      <div class="label">评分点</div>
+    </div>
+    <div class="stat">
+      <div class="value">2025-06-19</div>
+      <div class="label">起始日期</div>
+    </div>
+    <div class="stat">
+      <div class="value">2026-05-07</div>
+      <div class="label">结束日期</div>
+    </div>
+    <div class="stat">
+      <div class="value">+0.1%</div>
+      <div class="label">Top 30 5日平均收益</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>📊 累计超额收益曲线（Top 30 vs 等权基准）</h2>
+  <div style="height:300px"><canvas id="cumExcessChart"></canvas></div>
+</div>
+
+<div class="card">
+  <h2>📊 分组收益对比（箱线图模拟）</h2>
+  <div style="height:280px"><canvas id="barChart"></canvas></div>
+</div>
+
+<div class="card">
+  <h2>📋 详细统计</h2>
+  <table>
+    <thead>
+      <tr><th>分组</th><th>持仓</th><th>平均收益</th><th>中位数</th><th>标准差</th><th>胜率</th><th>最大回撤</th><th>最大收益</th></tr></thead>
+    <tbody>
+      <tr class="highlight"><td>Top 30</td><td>5 日</td><td class="positive">+0.1%</td><td>+0.0%</td><td>1.0%</td><td>55%</td><td class="negative">-1.8%</td><td class="positive">+1.9%</td></tr>
+<tr class="highlight"><td>Top 30</td><td>10 日</td><td class="positive">+0.1%</td><td>+0.0%</td><td>1.4%</td><td>51%</td><td class="negative">-2.8%</td><td class="positive">+4.0%</td></tr>
+<tr class="highlight"><td>Top 30</td><td>20 日</td><td class="positive">+0.7%</td><td>+0.7%</td><td>1.8%</td><td>66%</td><td class="negative">-3.7%</td><td class="positive">+5.0%</td></tr>
+<tr class=""><td>Middle 40</td><td>5 日</td><td class="positive">+0.3%</td><td>+0.3%</td><td>0.7%</td><td>68%</td><td class="negative">-1.3%</td><td class="positive">+1.8%</td></tr>
+<tr class=""><td>Middle 40</td><td>10 日</td><td class="positive">+0.7%</td><td>+0.8%</td><td>1.0%</td><td>72%</td><td class="negative">-1.3%</td><td class="positive">+3.2%</td></tr>
+<tr class=""><td>Middle 40</td><td>20 日</td><td class="positive">+1.0%</td><td>+1.1%</td><td>1.5%</td><td>74%</td><td class="negative">-2.0%</td><td class="positive">+4.4%</td></tr>
+<tr class=""><td>Bottom 30</td><td>5 日</td><td class="positive">+0.3%</td><td>+0.3%</td><td>1.0%</td><td>57%</td><td class="negative">-1.8%</td><td class="positive">+2.5%</td></tr>
+<tr class=""><td>Bottom 30</td><td>10 日</td><td class="positive">+0.3%</td><td>+0.3%</td><td>1.3%</td><td>60%</td><td class="negative">-2.4%</td><td class="positive">+4.0%</td></tr>
+<tr class=""><td>Bottom 30</td><td>20 日</td><td class="positive">+0.8%</td><td>+0.8%</td><td>1.4%</td><td>70%</td><td class="negative">-2.4%</td><td class="positive">+4.0%</td></tr>
+<tr class=""><td>等权基准</td><td>5 日</td><td class="positive">+0.2%</td><td>+0.2%</td><td>0.5%</td><td>60%</td><td class="negative">-0.9%</td><td class="positive">+1.2%</td></tr>
+<tr class=""><td>等权基准</td><td>10 日</td><td class="positive">+0.4%</td><td>+0.3%</td><td>0.7%</td><td>77%</td><td class="negative">-1.1%</td><td class="positive">+2.2%</td></tr>
+<tr class=""><td>等权基准</td><td>20 日</td><td class="positive">+0.9%</td><td>+0.8%</td><td>0.9%</td><td>85%</td><td class="negative">-1.0%</td><td class="positive">+2.9%</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>🎯 结论</h2>
+  <div class="conclusion invalid">
+    <p style="font-size:16px;font-weight:600;margin-bottom:8px;">❌ 评分体系在当前窗口未显示稳定优势（5日超额 -0.2%）。建议调整因子权重。</p>
+    <p style="font-size:13px;color:#888;">
+      权重：动量20% + RSI适中度30% + ADX趋势强度30% + 均线排列20%<br>
+      评分点 47 个 | 数据源：合成数据 (统计模型验证)
+    </p>
+  </div>
+</div>
+
+<script>
+const dates = ["2025-06-19", "2025-06-26", "2025-07-03", "2025-07-10", "2025-07-17", "2025-07-24", "2025-07-31", "2025-08-07", "2025-08-14", "2025-08-21", "2025-08-28", "2025-09-04", "2025-09-11", "2025-09-18", "2025-09-25", "2025-10-02", "2025-10-09", "2025-10-16", "2025-10-23", "2025-10-30", "2025-11-06", "2025-11-13", "2025-11-20", "2025-11-27", "2025-12-04", "2025-12-11", "2025-12-18", "2025-12-25", "2026-01-01", "2026-01-08", "2026-01-15", "2026-01-22", "2026-01-29", "2026-02-05", "2026-02-12", "2026-02-19", "2026-02-26", "2026-03-05", "2026-03-12", "2026-03-19", "2026-03-26", "2026-04-02", "2026-04-09", "2026-04-16", "2026-04-23", "2026-04-30", "2026-05-07"];
+const colors = { top: '#ff4444', mid: '#888', bot: '#00cc66', eq: '#4488ff' };
+
+function makeCumulative(returns) {
+  let cum = [0];
+  for (let r of returns) cum.push(cum[cum.length - 1] + r);
+  return cum;
+}
+
+// 累计超额收益（Top 30 - 等权基准）
+const top5d = [0.007649601628990984, -0.9820323185720146, 0.027550941749510893, -0.069826397957262, 0.774277162447603, -1.3417098050266982, 1.0153482793158506, -0.2223868331704029, 1.538296098530401, -1.3947391904969708, 0.6788051006224639, -0.5429431401675298, -0.5342808060164311, 0.22677513181067993, 1.8110901097309364, -0.5409102873608576, -1.5774211103398506, 0.025018758849879127, -1.7951852807223176, 0.5942892669368195, 1.1799798004984194, 1.3503894509312953, -0.053425013729145474, 0.5423052357738226, -0.5392382335478262, 0.8785472156798397, -0.26520027226938014, 0.09594828734204487, -1.4937809320843864, -1.4880890617374989, 0.9336489531490509, 0.42198991026327803, 0.2525078969490505, -0.8470317321981825, 0.13527631766015355, 0.369566603887522, -1.2737708466547975, -0.7792027636271859, 1.0092235766671327, -0.5699182684292686, 0.7308608138773994, -0.4321262643443112, 1.3356452161414205, 1.8739014782772259, 0.9052778863012565, 1.7757163716490405, -0.6629469146065801];
+const eq5d = [0.6250663538999529, -0.8756336901610169, 0.41526648914927344, -0.09111229466430902, 0.6470363033032105, -0.5273508283044386, 0.7257969062852748, 0.25766374358080485, 0.222247535212962, -0.28384252504289603, 0.5707981006061918, -0.044253133789706904, 0.16020088461992577, 0.5326458808755157, 0.9146409045321282, -0.807362945352052, -0.29776532439841225, 0.3738754203288208, -0.17902967196549585, 0.4422371359028548, 9.278840115907961e-05, 0.7818159848169952, -0.3638051788046869, 0.29413878940266397, 0.4884385109364641, 1.2012725042866854, 0.9860231739689879, 0.18766181000170853, -0.18888952442020876, -0.027699199389789052, -0.07360430956807923, 0.8833975601259355, -0.08195848948010305, -0.2785893275934722, 0.4721810264967483, -0.32277061299857385, -0.7695780541108238, -0.037937721708468264, 0.9779452306148119, -0.30296188201302193, 0.389948815886203, -0.04852357714901235, 0.031133717053752185, 0.9944381033980411, 0.2587208748918671, 1.2357152333826302, 0.4238225584888217];
+const excess5d = top5d.map((v, i) => v - (eq5d[i] || 0));
+
+const top20d = [0.9962140538666886, 2.3121067289276427, 0.24733891038550065, -0.3233810947891061, 1.3513011632741834, 1.8420021681187295, 0.9734663005530094, -1.1488873318196577, 2.6777885655286786, 0.39556269072748335, 1.9690056430257108, -0.21984065373179712, 0.36128569877604627, 0.43618246802481114, 0.829522991645972, -1.343893115027747, 0.43296366402846204, 0.5632966675314898, -1.9875398371281865, 1.4018728219143552, 1.908664566270113, 2.1920465805571765, 2.3569465546334354, 2.48368364847156, 2.4420220599474685, 1.796852767872567, -0.4907712482239736, -2.191426957301945, 0.6717218434902021, -0.11502387501086571, 1.2044231184304208, -0.32869832464671295, -0.8446842382634192, -0.82489050512395, -2.863484147979793, 1.2808087242893669, -1.9800391581167769, -0.13145111135465, 0.42973876373896613, -1.3224807402376257, 2.2734789683685084, 0.8392574193737725, 4.980735255931728, 2.567132650674994, 2.5542274778415472, 4.712706421546909, -3.6680698863123884];
+const eq20d = [0.22516060728266915, 0.03921097820741083, 0.40385145865792416, 0.703644701683528, 1.0228001332890952, 0.5415431916149727, 0.8899278326495221, 0.7943382081165327, 0.4173989520656546, 0.3546106014268782, 1.1953940801822223, 1.662803898036757, 0.9372966570592491, 0.33708692533169804, 0.0919555489651965, -1.0180169625581006, 0.29545235892722244, 0.6409762605908733, 1.066842262139538, 0.8895415935473189, 0.6604759711208833, 1.1672027851916862, 1.5645591160595325, 2.8814477308781443, 2.8989814077615224, 2.0947468997602683, 0.8693219705003219, -0.1194526779531256, 0.39302402341363135, 0.6164009180168856, 0.3863640150742722, 1.0259601784311125, -0.09212197696692252, -0.8449991466353238, -0.7127703753150432, -0.23614937348550435, -0.23978705025702518, 0.9957745657575479, 1.034677203803425, 0.15306222889169074, 1.5935471264986407, 1.3028804404038465, 2.538291177649514, 2.873370809095557, 1.8987689312199334, 2.5387820902615594, 1.593745535159673];
+const excess20d = top20d.map((v, i) => v - (eq20d[i] || 0));
+
+new Chart(document.getElementById('cumExcessChart'), {
+  type: 'line',
+  data: {
+    labels: dates,
+    datasets: [
+      { label: '5日持仓超额', data: makeCumulative(excess5d), borderColor: '#ff4444', backgroundColor: 'transparent', tension: 0.2, borderWidth: 2 },
+      { label: '20日持仓超额', data: makeCumulative(excess20d), borderColor: '#00cc66', backgroundColor: 'transparent', tension: 0.2, borderWidth: 2 },
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { labels: { color: '#aaa', font: { size: 11 } } } },
+    scales: {
+      x: { ticks: { color: '#666', maxTicksLimit: 12, font: { size: 10 } }, grid: { color: '#1a1d2b' } },
+      y: { ticks: { color: '#666', callback: v => v.toFixed(1) + '%', font: { size: 10 } }, grid: { color: '#1a1d2b' } }
+    }
+  }
+});
+
+// 分组收益对比柱状图
+const groups = ['Top 30', 'Middle 40', 'Bottom 30', '等权基准'];
+const hpLabels = ['5日', '10日', '20日'];
+const data5d = [
+  0.066,
+  0.259,
+  0.291,
+  0.21
+];
+const data10d = [
+  0.083,
+  0.7,
+  0.336,
+  0.406
+];
+const data20d = [
+  0.674,
+  1.037,
+  0.803,
+  0.858
+];
+
+new Chart(document.getElementById('barChart'), {
+  type: 'bar',
+  data: {
+    labels: groups,
+    datasets: [
+      { label: '5日', data: data5d, backgroundColor: '#ff444488', borderColor: '#ff4444', borderWidth: 1 },
+      { label: '10日', data: data10d, backgroundColor: '#4488ff88', borderColor: '#4488ff', borderWidth: 1 },
+      { label: '20日', data: data20d, backgroundColor: '#00cc6688', borderColor: '#00cc66', borderWidth: 1 },
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { labels: { color: '#aaa', font: { size: 11 } } } },
+    scales: {
+      x: { ticks: { color: '#888', font: { size: 11 } }, grid: { display: false } },
+      y: { ticks: { color: '#666', callback: v => v.toFixed(1) + '%', font: { size: 10 } }, grid: { color: '#1a1d2b' } }
+    }
+  }
+});
+</script>
+</body>
+</html>

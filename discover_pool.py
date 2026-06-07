@@ -46,6 +46,7 @@ else:
 
 _CACHE_FILE = _BASE_DIR / "stock_pool_dynamic.json"
 _LOCK_FILE = _CACHE_FILE.with_suffix(".lock")
+_COOLDOWN_FILE = _CACHE_FILE.with_suffix(".cooldown")
 
 # ---- 市场基准（用于检测市场状态）-----------------------------------------
 MARKET_BENCHMARK = "SPY"
@@ -688,6 +689,12 @@ def main():
         try:
             if _LOCK_FILE.exists():
                 _LOCK_FILE.unlink()
+        except Exception:
+            pass
+        # V2.1.4: 扫描成功后清理冷却文件，允许立即请求新数据
+        try:
+            if _COOLDOWN_FILE.exists():
+                _COOLDOWN_FILE.unlink()
         except Exception:
             pass
 

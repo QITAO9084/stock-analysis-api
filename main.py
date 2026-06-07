@@ -2321,51 +2321,64 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                     except Exception:
                         pass
 
-            # V2.1.3: 刷新冷却机制（避免 yfinance 限流时反复触发空刷新）
-            # 如果 2 分钟内触发过刷新但缓存没更新 → 说明 yfinance 可能限流 → 返回旧数据
+            # V2.1.4: 刷新冷却机制（彻底修复死循环）
+            # 冷却期内不管缓存有没有数据，都不再触发新刷新
             if _COOLDOWN_FILE.exists():
                 try:
                     cooldown_age = time.time() - _COOLDOWN_FILE.stat().st_mtime
                     if cooldown_age < 120:
+                        # 冷却期：尝试用旧缓存数据
                         if pool_file.exists():
                             try:
                                 with open(pool_file, "r", encoding="utf-8") as f:
                                     stale_data = json.load(f)
                                 stale_data["is_fresh"] = False
-                                stale_data.setdefault("fallback_reason", "数据源限流，使用缓存")
+                                stale_data.setdefault("fallback_reason", "冷却期内，使用缓存数据")
                                 dynamic_symbols = [item["symbol"] for item in stale_data.get("top_30", [])]
                                 if dynamic_symbols:
                                     need_refresh = False
-                                    # 标记为降级数据
                                     stale_pool = stale_data
                             except Exception:
                                 pass
+                        # 冷却期内无可用数据 → 直接返回等待消息，不再重新触发
+                        if need_refresh:
+                            remaining = int(120 - cooldown_age)
+                            return {"formatted_report": (
+                                f"⏳ 动态池正在扫描中（冷却期剩余约 {remaining} 秒）。\n"
+                                "请稍后再发送「6」查看结果。\n"
+                                "（冷却期内不会重复触发扫描，避免数据源限流。）"
+                            )}
                     else:
-                        _COOLDOWN_FILE.unlink()
+                        try:
+                            _COOLDOWN_FILE.unlink()
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
-            # 写入冷却标记
-            try:
-                _COOLDOWN_FILE.write_text(json.dumps({"ts": time.time()}), encoding="utf-8")
-            except Exception:
-                pass
+            # need_refresh 为 True 且不在冷却期内 → 触发新扫描
+            if need_refresh:
+                # 写入冷却标记（在触发子进程之前）
+                try:
+                    _COOLDOWN_FILE.write_text(json.dumps({"ts": time.time()}), encoding="utf-8")
+                except Exception:
+                    pass
 
-            # 后台触发刷新
-            try:
-                subprocess.Popen(
-                    [_sys.executable, str(_DISCOVER_SCRIPT)],
-                    cwd=str(_SCRIPT_DIR),
-                    stdout=subprocess.DEVNULL,
-                    stderr=open(str(_SCRIPT_DIR / "discover_pool.log"), "a"),
-                    start_new_session=True,
-                )
-            except Exception as e:
-                return {"formatted_report": "⚠️ 触发刷新失败：" + str(e)}
-            return {"formatted_report": (
-                "📊 动态池刷新已触发，正在后台扫描 100 只美股（约需 60 秒）。\n"
-                "请 1 分钟后再发送「6」查看最新结果。"
-            )}
+                # 后台触发刷新
+                try:
+                    subprocess.Popen(
+                        [_sys.executable, str(_DISCOVER_SCRIPT)],
+                        cwd=str(_SCRIPT_DIR),
+                        stdout=subprocess.DEVNULL,
+                        stderr=open(str(_SCRIPT_DIR / "discover_pool.log"), "a"),
+                        start_new_session=True,
+                    )
+                except Exception as e:
+                    return {"formatted_report": "⚠️ 触发刷新失败：" + str(e)}
+                return {"formatted_report": (
+                    "📊 动态池刷新已触发，正在后台扫描 100 只美股（约需 60 秒）。\n"
+                    "请 1 分钟后再发送「6」查看最新结果。"
+                )}
 
         if not dynamic_symbols:
             return {"formatted_report": "⚠️ 动态池为空，刷新中，请稍后重试。"}
