@@ -229,6 +229,15 @@ app.default_response_class = CleanJSONResponse
 class FormattedReportResponse(BaseModel):
     formatted_report: str
 
+# V2.2.6: 增强 batch_analyze 响应格式，包含结构化数据让 Coze 能正确解析
+class BatchAnalyzeResponse(BaseModel):
+    status: str = "success"
+    market: str = "us"
+    total: int = 0
+    results_count: int = 0
+    formatted_report: str
+    summary: dict = {}
+
 # ===== 优雅降级：500 错误返回详细信息 =====
 import traceback as _traceback
 
@@ -2378,7 +2387,7 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
 
 
 
-@app.get("/batch/analyze", response_model=FormattedReportResponse)
+@app.get("/batch/analyze", response_model=BatchAnalyzeResponse)
 def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     """
     V5.40: 批量分析接口 — 一次扫多只股票，返回排名汇总表（含趋势追踪📈📉）
@@ -2863,7 +2872,27 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     # 保存本次趋势数据
     _save_trend(new_trend)
 
-    return {"formatted_report": report}
+    # V2.2.6: 构建结构化摘要，帮助 Coze 插件解析
+    summary = {}
+    if results:
+        active = [r for r in results if r["rating"] != "D"]
+        d_grade = [r for r in results if r["rating"] == "D"]
+        summary = {
+            "top_symbols": [r["symbol"] for r in active[:5]],
+            "top_ratings": [r["rating"] for r in active[:5]],
+            "signal_distribution": signal_distribution,
+            "data_date": _data_date,
+            "stale": _stale if '_stale' in dir() else False,
+        }
+
+    return {
+        "status": "success",
+        "market": market,
+        "total": len(results),
+        "results_count": len([r for r in results if r["rating"] != "D"]),
+        "formatted_report": report,
+        "summary": summary
+    }
 
 
 # ==================== V5.40: 动态池发现 ====================
