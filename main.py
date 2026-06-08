@@ -1,3 +1,4 @@
+# V2.2.4: yfinance 1.4+ MultiIndex compatibility fix in discover_pool.py
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
