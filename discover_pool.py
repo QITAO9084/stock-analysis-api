@@ -488,6 +488,9 @@ def fetch_spy_data(period: str = "3mo") -> object:
             auto_adjust=True,
         )
         if data is not None and len(data) >= 20:
+            # V2.2.4: yfinance 1.4+ 返回 MultiIndex 列 ('Close','SPY')，展平为单层
+            if hasattr(data.columns, 'nlevels') and data.columns.nlevels > 1:
+                data.columns = data.columns.droplevel(1)
             return data
     except Exception as e:
         print(f"  ⚠️ SPY 数据下载失败：{e}")
