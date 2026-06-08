@@ -2448,10 +2448,17 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                         lock_data = json.load(lf)
                     lock_age = time.time() - lock_data.get("started_at", 0)
                     if lock_age < 120:
-                        return {"formatted_report": (
-                            "⏳ 动态池正在刷新中（已运行约 " + str(int(lock_age)) + " 秒）。\n"
-                            + "请等待刷新完成后再发送「6」查看结果。"
-                        )}
+                        return {
+                            "status": "pending",
+                            "market": market,
+                            "total": 0,
+                            "results_count": 0,
+                            "formatted_report": (
+                                "⏳ 动态池正在刷新中（已运行约 " + str(int(lock_age)) + " 秒）。\n"
+                                + "请等待刷新完成后再发送「6」查看结果。"
+                            ),
+                            "summary": {}
+                        }
                     else:
                         _LOCK_FILE.unlink()
                 except Exception:
@@ -2482,11 +2489,18 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                         # 冷却期内无可用数据 → 直接返回等待消息，不再重新触发
                         if need_refresh:
                             remaining = int(120 - cooldown_age)
-                            return {"formatted_report": (
-                                f"⏳ 动态池正在扫描中（冷却期剩余约 {remaining} 秒）。\n"
-                                "请稍后再发送「6」查看结果。\n"
-                                "（冷却期内不会重复触发扫描，避免数据源限流。）"
-                            )}
+                            return {
+                                "status": "pending",
+                                "market": market,
+                                "total": 0,
+                                "results_count": 0,
+                                "formatted_report": (
+                                    f"⏳ 动态池正在扫描中（冷却期剩余约 {remaining} 秒）。\n"
+                                    "请稍后再发送「6」查看结果。\n"
+                                    "（冷却期内不会重复触发扫描，避免数据源限流。）"
+                                ),
+                                "summary": {}
+                            }
                     else:
                         try:
                             _COOLDOWN_FILE.unlink()
@@ -2513,14 +2527,35 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                         start_new_session=True,
                     )
                 except Exception as e:
-                    return {"formatted_report": "⚠️ 触发刷新失败：" + str(e)}
-                return {"formatted_report": (
-                    "📊 动态池刷新已触发，正在后台扫描 100 只美股（约需 60 秒）。\n"
-                    "请 1 分钟后再发送「6」查看最新结果。"
-                )}
+                    return {
+                        "status": "error",
+                        "market": market,
+                        "total": 0,
+                        "results_count": 0,
+                        "formatted_report": "⚠️ 触发刷新失败：" + str(e),
+                        "summary": {}
+                    }
+                return {
+                    "status": "pending",
+                    "market": market,
+                    "total": 0,
+                    "results_count": 0,
+                    "formatted_report": (
+                        "📊 动态池刷新已触发，正在后台扫描 100 只美股（约需 60 秒）。\n"
+                        "请 1 分钟后再发送「6」查看最新结果。"
+                    ),
+                    "summary": {}
+                }
 
         if not dynamic_symbols:
-            return {"formatted_report": "⚠️ 动态池为空，刷新中，请稍后重试。"}
+            return {
+                "status": "error",
+                "market": market,
+                "total": 0,
+                "results_count": 0,
+                "formatted_report": "⚠️ 动态池为空，刷新中，请稍后重试。",
+                "summary": {}
+            }
         symbols = ",".join(dynamic_symbols[:15])
         print(f"[batch_analyze] 动态池模式：使用 {len(dynamic_symbols[:15])} 只股票")
 
@@ -2546,7 +2581,14 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
             failed.append(sym)
 
     if not results:
-        return {"formatted_report": "❌ 所有股票分析失败，请检查代码后重试。"}
+        return {
+            "status": "error",
+            "market": market,
+            "total": 0,
+            "results_count": 0,
+            "formatted_report": "❌ 所有股票分析失败，请检查代码后重试。",
+            "summary": {}
+        }
 
     # 按评分降序
     results.sort(key=lambda x: x["rating_score"], reverse=True)
