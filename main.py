@@ -2877,6 +2877,13 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
     if results:
         active = [r for r in results if r["rating"] != "D"]
         d_grade = [r for r in results if r["rating"] == "D"]
+        signal_distribution = {
+            "A": len([r for r in results if r["rating"] == "A"]),
+            "B": len([r for r in results if r["rating"] == "B"]),
+            "C": len([r for r in results if r["rating"] == "C"]),
+            "D": len([r for r in results if r["rating"] == "D"]),
+            "error": len(failed),
+        }
         summary = {
             "top_symbols": [r["symbol"] for r in active[:5]],
             "top_ratings": [r["rating"] for r in active[:5]],
