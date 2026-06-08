@@ -2933,7 +2933,7 @@ def discover_stocks(limit: int = 30, force: bool = False):
         subprocess.Popen(
             [_sys.executable, str(_DISCOVER_SCRIPT)],
             cwd=str(_SCRIPT_DIR),
-            stdout=subprocess.DEVNULL,
+            stdout=open(str(_SCRIPT_DIR / "discover_pool.log"), "a"),
             stderr=open(str(_SCRIPT_DIR / "discover_pool.log"), "a"),
             start_new_session=True,
         )
@@ -2943,6 +2943,20 @@ def discover_stocks(limit: int = 30, force: bool = False):
         )}
     except Exception as e:
         return {"formatted_report": "⚠️ 触发刷新失败：" + str(e)}
+
+
+# V2.2.4: 诊断端点 — 查看 discover_pool 子进程日志
+@app.get("/debug/discover_log")
+def debug_discover_log():
+    from pathlib import Path as _Path
+    log_file = _Path(__file__).parent / "discover_pool.log"
+    if not log_file.exists():
+        return {"log": "[日志文件不存在]"}
+    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    # 只返回最近 5000 字符，避免过大
+    return {"log": content[-5000:]}
+
 
 # ==================== V5.26: 多股持仓面板 ====================
 

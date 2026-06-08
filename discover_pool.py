@@ -712,6 +712,11 @@ def main():
 
     try:
         result = run_discover(fast=args.fast, show_regime_only=args.show_regime)
+    except Exception as e:
+        import traceback
+        print(f"❌ 动态池扫描异常：{type(e).__name__}: {e}")
+        traceback.print_exc()
+        result = None
     finally:
         # 清理锁文件（无论如何都要清理）
         try:
