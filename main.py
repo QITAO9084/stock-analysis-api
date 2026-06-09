@@ -8339,7 +8339,7 @@ def portfolio_monitor():
             lines.append(f"   → {a}")
 
     lines.append("─" * 50)
-    lines.append("💡 在 Coze 中回复「持仓状态」查看详情 | 「平仓 XXX」执行操作")
+    lines.append("💡 回复「持仓状态」查看详情 | 「平仓 XXX」执行操作 | 「8」再次监控")
 
     report = "\n".join(lines)
 
