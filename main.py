@@ -2900,7 +2900,7 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
         lines.append("   " + " | ".join(_trend_parts))
         # V2.1.12: 全部未更新时明确提示
         if unchanged_count == len(results):
-            lines.append(f"   ⚠️ 全部 {unchanged_count} 只数据均未更新，信号仅作参考，不可作为交易依据。")
+            lines.append(f"   📊 趋势追踪首日启用，{unchanged_count} 只暂无历史对比数据（价格数据为 {_data_date}，实时有效）。")
         # 列出明显变化的
         big_movers = [r for r in results if r.get("trend_marker") in ("📈", "📉")]
         if big_movers:
