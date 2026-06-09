@@ -2387,9 +2387,10 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
 
 
 @app.get("/batch/analyze", response_model=BatchAnalyzeResponse)
-def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
+def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default", force_refresh: bool = False):
     """
     V5.40: 批量分析接口 — 一次扫多只股票，返回排名汇总表（含趋势追踪📈📉）
+    V2.2.11: force_refresh=True 时跳过 120 秒冷却期，强制触发池刷新
 
     对每只股票跑完整 analyze2 逻辑（含信号评级+凯利仓位），
     按评分排名，输出紧凑汇总表。一次 Coze 工具调用扫 5-6 只。
@@ -2466,12 +2467,38 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                     except Exception:
                         pass
 
+            # V2.2.11: force_refresh 跳过冷却期，强制刷新
+            if force_refresh:
+                need_refresh = True
+                # 清除冷却文件，让刷新立即执行
+                if _COOLDOWN_FILE.exists():
+                    try:
+                        _COOLDOWN_FILE.unlink()
+                    except Exception:
+                        pass
+                # 清除超时的锁文件
+                if _LOCK_FILE.exists():
+                    try:
+                        with open(_LOCK_FILE, "r", encoding="utf-8") as lf:
+                            lock_data = json.load(lf)
+                        lock_age = time.time() - lock_data.get("started_at", 0)
+                        if lock_age > 120:
+                            _LOCK_FILE.unlink()
+                    except Exception:
+                        pass
+
             # V2.1.4: 刷新冷却机制（彻底修复死循环）
             # 冷却期内不管缓存有没有数据，都不再触发新刷新
-            if _COOLDOWN_FILE.exists():
+            if _COOLDOWN_FILE.exists() and not force_refresh:
                 try:
                     cooldown_age = time.time() - _COOLDOWN_FILE.stat().st_mtime
-                    if cooldown_age < 120:
+                    # V2.2.11: 读取自定义冷却时长（force_refresh=60s，普通=120s）
+                    try:
+                        cd_data = json.loads(_COOLDOWN_FILE.read_text(encoding="utf-8"))
+                        cd_limit = cd_data.get("cooldown", 120)
+                    except Exception:
+                        cd_limit = 120
+                    if cooldown_age < cd_limit:
                         # 冷却期：尝试用旧缓存数据
                         if pool_file.exists():
                             try:
@@ -2487,7 +2514,7 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                                 pass
                         # 冷却期内无可用数据 → 直接返回等待消息，不再重新触发
                         if need_refresh:
-                            remaining = int(120 - cooldown_age)
+                            remaining = int(cd_limit - cooldown_age)
                             return {
                                 "status": "pending",
                                 "market": market,
@@ -2511,8 +2538,10 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
             # need_refresh 为 True 且不在冷却期内 → 触发新扫描
             if need_refresh:
                 # 写入冷却标记（在触发子进程之前）
+                # V2.2.11: force_refresh 用 60s 短冷却，普通刷新用 120s
+                _cooldown_secs = 60 if force_refresh else 120
                 try:
-                    _COOLDOWN_FILE.write_text(json.dumps({"ts": time.time()}), encoding="utf-8")
+                    _COOLDOWN_FILE.write_text(json.dumps({"ts": time.time(), "cooldown": _cooldown_secs}), encoding="utf-8")
                 except Exception:
                     pass
 
@@ -2534,13 +2563,14 @@ def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default"):
                         "formatted_report": "⚠️ 触发刷新失败：" + str(e),
                         "summary": {}
                     }
+                _msg = "⚡ 强制刷新" if force_refresh else "📊 动态池刷新"
                 return {
                     "status": "pending",
                     "market": market,
                     "total": 0,
                     "results_count": 0,
                     "formatted_report": (
-                        "📊 动态池刷新已触发，正在后台扫描 100 只美股（约需 60 秒）。\n"
+                        f"{_msg}已触发，正在后台扫描 100 只美股（约需 60 秒）。\n"
                         "请 1 分钟后再发送「6」查看最新结果。"
                     ),
                     "summary": {}
