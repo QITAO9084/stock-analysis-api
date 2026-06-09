@@ -3496,6 +3496,32 @@ def portfolio_status():
     }
 
 
+# V2.2.13: GET 平仓 — Coze 直接调用，无需 POST body
+@app.get("/portfolio/quick-close")
+def portfolio_quick_close(symbol: str, exit_price: float = 0, reason: str = "Coze quick close"):
+    """快速平仓（GET）— 按 symbol 平掉第一条匹配持仓
+
+    Coze 直接 GET 调用，无需配置 POST body 参数。
+    自动获取当前价，写入交易日志。
+    """
+    import json as _json
+    # 复用 POST /portfolio/close 的完整逻辑
+    reason_safe = ''.join(c for c in reason if c.isprintable() and ord(c) < 128)[:200]
+    if not symbol:
+        return {"status": "error", "message": "请提供 symbol 参数"}
+    result = portfolio_close(PortfolioCloseRequest(
+        symbol=symbol,
+        exit_price=exit_price,
+        reason=reason_safe,
+    ))
+    # 包装为 formatted_report 方便 Coze 展示
+    if result.get("status") == "ok":
+        result["formatted_report"] = result.get("message", str(result))
+    else:
+        result["formatted_report"] = f"❌ 平仓失败：{result.get('message', '未知错误')}"
+    return result
+
+
 @app.post("/portfolio/close")
 def portfolio_close(req: PortfolioCloseRequest):
     """平仓记录 — 从持仓中移除并写入交易日志
