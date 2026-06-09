@@ -1811,8 +1811,7 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
         pos_text = f"""建议仓位：0%（不建议入场）
 原因：评级 {rating_data['rating']} 级（{rating_data['rating_desc']}）"""
 
-    report = f"""【{fields.get('name', 'N/A')}（{fields.get('symbol', 'N/A')}）技术分析报告】
-生成时间：{fields.get('analysis_time', 'N/A')}
+    report = f"""生成时间：{fields.get('analysis_time', 'N/A')}
 当前价格：{fields.get('current_price', 0):.2f} {currency}  ({change_pct:+.2f}%)
 ADX趋势强度：{adx:.1f}（{fields.get('adx_trend', 'N/A')}）| 评分：{score_display}
 大盘环境：{mkt_name} {mkt_price:.2f}（近30日 {mkt_change:+.1f}%，{mkt_grade}）
@@ -4985,8 +4984,7 @@ def run_backtest(data, symbol: str, days: int = 60) -> dict:
     else:
         score_display = f"{score}/100"
 
-    report = f"""【{fields.get('name', 'N/A')}（{fields.get('symbol', 'N/A')}）技术分析报告】
-生成时间：{fields.get('analysis_time', 'N/A')}
+    report = f"""生成时间：{fields.get('analysis_time', 'N/A')}
 当前价格：{fields.get('current_price', 0):.2f} {currency}  ({change_pct:+.2f}%)
 大盘环境：{mkt_name} {mkt_price:.2f}（近30日 {mkt_change:+.1f}%，{mkt_grade}）
 ADX趋势强度：{adx:.1f}（{fields.get('adx_trend', 'N/A')}）| 14维评分：{score_display}
