@@ -142,7 +142,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.37.0"
+    version="5.38.0"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -8185,6 +8185,171 @@ async def ssq_pick(date: str = "", mode: str = "auto", count: int = 5, birthday:
     }
 
 
+
+
+# V2.2.12: 持仓监控 — 止损/止盈实时警报（P0：自动化风控）
+@app.get("/portfolio/monitor")
+def portfolio_monitor():
+    """持仓监控 — 实时检查止损/止盈/风险警报
+
+    Coze 定时调用此端点，实现自动化持仓风险监控。
+    对每只持仓检查：止损触发 / 止盈触发 / 接近报警。
+
+    返回：
+    - formatted_report: 格式化警报报告（Coze 可直接展示）
+    - status: OK（无警报）/ WARNING（接近线）/ ALERT（已触发）
+    - alerts: 结构化警报列表
+    - positions: 每只持仓的详细信息
+    """
+    pf = _load_portfolio()
+    positions = pf.get("positions", [])
+
+    if not positions:
+        return {
+            "formatted_report": "📭 当前无持仓，无需监控。",
+            "status": "OK",
+            "alert_count": 0,
+            "alerts": [],
+            "positions": [],
+        }
+
+    now_str = beijing_now().strftime("%Y-%m-%d %H:%M")
+    alerts = []
+    enriched = []
+
+    # 阈值定义
+    NEAR_SL_PCT = 0.03   # 3% 内视为接近止损
+    NEAR_TP_PCT = 0.05   # 5% 内视为接近止盈
+
+    for pos in positions:
+        sym = pos["symbol"]
+        entry = pos["entry_price"]
+        shares = pos["shares"]
+        sl = pos.get("stop_loss", 0)
+        tp = pos.get("take_profit", 0)
+        direction = pos.get("direction", "LONG")
+        is_short = direction == "SHORT"
+
+        current = _get_current_price(sym)
+        cost = entry * shares
+        value = current * shares if current > 0 else cost
+
+        if is_short:
+            pnl = (entry - current) * shares
+        else:
+            pnl = (current - entry) * shares
+        pnl_pct = (pnl / cost * 100) if cost > 0 else 0
+
+        pos_alerts = []
+        alert_level = "OK"
+
+        if current > 0:
+            if is_short:
+                # 做空：价格上涨到 stop_loss → 止损触发
+                if sl > 0 and current >= sl:
+                    pos_alerts.append(f"🔴 触及空仓止损价 ${sl:.2f}（现价 ${current:.2f}）")
+                    alert_level = "ALERT"
+                elif sl > 0 and current >= sl * (1 - NEAR_SL_PCT):
+                    dist_pct = (sl - current) / current * 100
+                    pos_alerts.append(f"⚠️ 接近空仓止损价 ${sl:.2f}（现价 ${current:.2f}，距离 {dist_pct:.1f}%）")
+                    if alert_level == "OK":
+                        alert_level = "WARNING"
+
+                if tp > 0 and current <= tp:
+                    pos_alerts.append(f"🟢 触及空仓止盈价 ${tp:.2f}（现价 ${current:.2f}）")
+                    alert_level = "ALERT"
+                elif tp > 0 and current <= tp * (1 + NEAR_TP_PCT):
+                    dist_pct = (current - tp) / current * 100
+                    pos_alerts.append(f"📈 接近空仓止盈价 ${tp:.2f}（现价 ${current:.2f}，距离 {dist_pct:.1f}%）")
+                    if alert_level == "OK":
+                        alert_level = "WARNING"
+            else:
+                # 做多：价格跌到 stop_loss → 止损触发
+                if sl > 0 and current <= sl:
+                    pos_alerts.append(f"🔴 触及止损价 ${sl:.2f}（现价 ${current:.2f}）")
+                    alert_level = "ALERT"
+                elif sl > 0 and current <= sl * (1 + NEAR_SL_PCT):
+                    dist_pct = (current - sl) / current * 100
+                    pos_alerts.append(f"⚠️ 接近止损价 ${sl:.2f}（现价 ${current:.2f}，距离 {dist_pct:.1f}%）")
+                    if alert_level == "OK":
+                        alert_level = "WARNING"
+
+                if tp > 0 and current >= tp:
+                    pos_alerts.append(f"🟢 触及止盈价 ${tp:.2f}（现价 ${current:.2f}）")
+                    alert_level = "ALERT"
+                elif tp > 0 and current >= tp * (1 - NEAR_TP_PCT):
+                    dist_pct = (tp - current) / current * 100
+                    pos_alerts.append(f"📈 接近止盈价 ${tp:.2f}（现价 ${current:.2f}，距离 {dist_pct:.1f}%）")
+                    if alert_level == "OK":
+                        alert_level = "WARNING"
+
+        pos_info = {
+            "symbol": sym,
+            "direction": direction,
+            "entry_price": round(entry, 2),
+            "current_price": round(current, 2),
+            "shares": shares,
+            "pnl": round(pnl, 2),
+            "pnl_pct": round(pnl_pct, 2),
+            "stop_loss": sl,
+            "take_profit": tp,
+            "alert_level": alert_level,
+            "alerts": pos_alerts,
+        }
+        enriched.append(pos_info)
+
+        if pos_alerts:
+            alerts.extend([{
+                "symbol": sym,
+                "level": alert_level,
+                "message": a,
+            } for a in pos_alerts])
+
+    # 全局状态判定
+    overall_status = (
+        "ALERT" if any(p["alert_level"] == "ALERT" for p in enriched)
+        else "WARNING" if any(p["alert_level"] == "WARNING" for p in enriched)
+        else "OK"
+    )
+
+    # 生成格式化报告
+    lines = [f"📡 持仓监控（{now_str}）", ""]
+
+    if overall_status == "ALERT":
+        lines.append("🚨 **有持仓触发警报，请立即处理！**")
+    elif overall_status == "WARNING":
+        lines.append("⚠️ 有持仓接近止损/止盈线，请注意。")
+    else:
+        lines.append("✅ 所有持仓安全，无警报。")
+    lines.append("")
+
+    for p in enriched:
+        sym = p["symbol"]
+        pnl_str = f"${p['pnl']:+,.0f}（{p['pnl_pct']:+.1f}%）"
+        direction_label = "[做空]" if p["direction"] == "SHORT" else ""
+
+        alert_icons = {"ALERT": "🔴", "WARNING": "⚠️", "OK": "✅"}
+        icon = alert_icons.get(p["alert_level"], "✅")
+        lines.append(
+            f"{icon} {sym} {direction_label} | "
+            f"现价 ${p['current_price']:,.2f} | 盈亏 {pnl_str} | "
+            f"止损 ${p['stop_loss']:,.2f} | 止盈 ${p['take_profit']:,.2f}"
+        )
+        for a in p["alerts"]:
+            lines.append(f"   → {a}")
+
+    lines.append("─" * 50)
+    lines.append("💡 在 Coze 中回复「持仓状态」查看详情 | 「平仓 XXX」执行操作")
+
+    report = "\n".join(lines)
+
+    return {
+        "formatted_report": report,
+        "status": overall_status,
+        "alert_count": len(alerts),
+        "alerts": alerts,
+        "positions": enriched,
+    }
 
 
 # V5.33.18: 清空测试数据（保留持仓）
