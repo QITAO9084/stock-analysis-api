@@ -3563,10 +3563,12 @@ def daily_brief():
             if top:
                 for i, t in enumerate(top):
                     sym = t.get("symbol", "?")
-                    # NaN 安全处理 — discover_pool.py 可能写入 NaN
+                    # NaN 安全处理 — discover_pool.py 可能写入 NaN（JSON 标准为 null）
                     import math as _math
                     def _safe(v, default=0):
                         try:
+                            if v is None:
+                                return default
                             f = float(v)
                             return default if _math.isnan(f) or _math.isinf(f) else f
                         except Exception:
