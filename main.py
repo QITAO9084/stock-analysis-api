@@ -3563,12 +3563,23 @@ def daily_brief():
             if top:
                 for i, t in enumerate(top):
                     sym = t.get("symbol", "?")
-                    score = t.get("score", 0)
-                    chg = t.get("change_pct_5d", 0)
-                    rsi = t.get("rsi", 0)
-                    adx = t.get("adx", 0)
+                    # NaN 安全处理 — discover_pool.py 可能写入 NaN
+                    import math as _math
+                    def _safe(v, default=0):
+                        try:
+                            f = float(v)
+                            return default if _math.isnan(f) or _math.isinf(f) else f
+                        except Exception:
+                            return default
+                    score = _safe(t.get("score", 0))
+                    chg = _safe(t.get("change_pct_5d", 0))
+                    rsi = _safe(t.get("rsi", 0))
+                    adx = _safe(t.get("adx", 0))
                     grade = "A" if score >= 75 else "B" if score >= 60 else "C"
-                    sections.append(f"  #{i+1} {sym:<6} {grade}级{score}分 | 5日{chg:+.1f}% RSI={rsi:.0f} ADX={adx:.0f}")
+                    score_str = f"{int(score)}" if score > 0 else "—"
+                    chg_str = f"{chg:+.1f}%" if chg != 0 else "—"
+                    adx_str = f"{adx:.0f}" if adx > 0 else "—"
+                    sections.append(f"  #{i+1} {sym:<6} {grade}级{score_str}分 | 5日{chg_str} RSI={rsi:.0f} ADX={adx_str}")
             else:
                 sections.append("  暂无数据，发送「7」触发更新")
         else:
