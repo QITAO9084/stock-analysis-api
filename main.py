@@ -142,7 +142,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.40.2"
+    version="5.40.3"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -204,6 +204,64 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ===== V2.2.19: 后台自动刷新动态池（解决 Coze 调用超时） =====
+# 每 30 分钟自动跑 discover_pool.py，确保缓存始终有数据
+# 用户输入「6」秒级返回，无需等待 60 秒子进程
+_BG_REFRESH_INTERVAL = 30 * 60  # 30 分钟
+_BG_REFRESH_RUNNING = False
+
+def _bg_discover_refresh():
+    """后台线程：定时刷新动态池缓存
+    
+    V2.2.19: 启动后立即执行首次刷新（不等 30 分钟），确保缓存有数据。
+    后续每 30 分钟（交易时段）或 2 小时（非交易时段）刷新。
+    """
+    global _BG_REFRESH_RUNNING
+    import subprocess as _bg_subprocess
+    _SCRIPT_DIR = Path(__file__).parent
+    _DISCOVER_SCRIPT = _SCRIPT_DIR / "discover_pool.py"
+    
+    first_run = True
+    
+    while True:
+        try:
+            now = beijing_now()
+            hour = now.hour
+            is_trading_window = (hour >= 20 or hour <= 6)  # 20:00-次日06:00 北京时间
+            
+            if first_run:
+                interval = 0  # 首次立即执行
+                first_run = False
+            else:
+                interval = _BG_REFRESH_INTERVAL if is_trading_window else 120 * 60
+            
+            if interval > 0:
+                time.sleep(interval)
+            
+            _BG_REFRESH_RUNNING = True
+            try:
+                result = _bg_subprocess.run(
+                    [sys.executable, str(_DISCOVER_SCRIPT), "--fast"],
+                    capture_output=True, text=True, timeout=90,
+                    cwd=str(_SCRIPT_DIR)
+                )
+                if result.returncode == 0:
+                    print(f"[BG-REFRESH] discover_pool OK at {beijing_now().strftime('%H:%M')}", flush=True)
+                elif result.stderr:
+                    print(f"[BG-REFRESH] discover_pool failed: {result.stderr[:200]}", flush=True)
+            except _bg_subprocess.TimeoutExpired:
+                print("[BG-REFRESH] discover_pool timeout (90s)", flush=True)
+            except Exception as e:
+                print(f"[BG-REFRESH] discover_pool error: {e}", flush=True)
+            finally:
+                _BG_REFRESH_RUNNING = False
+        except Exception:
+            time.sleep(300)  # 异常时 5 分钟后重试
+
+_bg_thread = threading.Thread(target=_bg_discover_refresh, daemon=True, name="discover-refresh")
+_bg_thread.start()
+print("[BG-REFRESH] Started background discover pool refresher (first run immediate, then every 30min)", flush=True)
 
 # ===== 全局 NaN/Inf 清洗：FastAPI 默认 JSONResponse 子类 =====
 from starlette.responses import JSONResponse as _BaseJSONResponse
