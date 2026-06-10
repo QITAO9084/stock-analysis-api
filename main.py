@@ -142,7 +142,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.40.0"
+    version="5.40.1"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -209,9 +209,21 @@ app.add_middleware(
 from starlette.responses import JSONResponse as _BaseJSONResponse
 
 class CleanJSONResponse(_BaseJSONResponse):
-    """自动清洗响应中的 NaN/Inf 浮点值（转为 JSON null），避免序列化报错"""
+    """自动清洗响应中的 NaN/Inf 浮点值（转为 JSON null），避免序列化报错
+    
+    V2.2.17: 支持 numpy 类型 (np.float64/np.int64 等) 的 NaN/Inf 检测
+    """
     def render(self, content) -> bytes:
         def _clean(obj):
+            # numpy 类型优先检测（np.float64 isnan 不匹配 Python isinstance(float)）
+            try:
+                import numpy as np
+                if isinstance(obj, (np.floating, np.integer)):
+                    if np.isnan(obj) or np.isinf(obj):
+                        return None
+                    return float(obj) if isinstance(obj, np.floating) else int(obj)
+            except ImportError:
+                pass
             if isinstance(obj, float):
                 if math.isnan(obj) or math.isinf(obj):
                     return None
