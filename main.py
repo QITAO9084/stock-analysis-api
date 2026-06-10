@@ -142,7 +142,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.40.1"
+    version="5.40.2"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -4989,6 +4989,10 @@ def get_market_trend(market: str) -> dict:
             # 每次重试用新的 Ticker 实例（独立 Session）
             ticker = yf.Ticker(ticker_symbol)
             data = ticker.history(period="3mo")
+            
+            # V2.2.18: dropna 清理 NaN Close（美股未收盘时最后一行可能全 NaN）
+            if data is not None and not data.empty:
+                data = data.dropna(subset=["Close"])
 
             if data is None or len(data) < 20:
                 continue  # 数据不足，重试
