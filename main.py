@@ -142,7 +142,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.39.0"
+    version="5.40.0"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -3493,6 +3493,173 @@ def portfolio_status():
             "total_pnl": round(total_pnl, 2),
             "total_pnl_pct": round(total_pnl_pct, 2),
         },
+    }
+
+
+# V2.2.14: 盘前早报（P1）— 一键获取大盘+信号+持仓风控+今日建议
+@app.get("/daily-brief")
+def daily_brief():
+    """盘前早报 — 四大模块合并输出（Coze 定时任务每日调用）
+
+    模块：
+    1. SPY 大盘状态（多空判断）
+    2. 动态池 Top5 信号速览
+    3. 持仓风控检查（同 /portfolio/monitor）
+    4. 今日操作建议（一句话）
+    """
+    now_str = beijing_now().strftime("%Y-%m-%d %H:%M")
+    sections = [f"📅 盘前早报 {now_str}（北京时间）", ""]
+
+    # ─── 模块一：SPY 大盘 ───────────────────────────────────
+    spy_price = _get_current_price("SPY")
+    spy_label = "获取失败"
+    spy_signal = "unknown"
+    try:
+        info, data = fetch_yf_data("SPY", period="2mo")
+        if data is not None and not data.empty:
+            close = data["Close"]
+            ma20 = float(close.rolling(20).mean().iloc[-1])
+            ma50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else ma20
+            curr = float(close.iloc[-1])
+            chg5 = float((curr - close.iloc[-6]) / close.iloc[-6] * 100) if len(close) >= 6 else 0
+            if curr > ma20 and curr > ma50 and chg5 > 0:
+                spy_signal = "bull"
+                spy_label = f"📈 多头（SPY ${curr:,.2f}，5日 {chg5:+.1f}%，站上MA20/MA50）"
+            elif curr < ma20 and curr < ma50 and chg5 < 0:
+                spy_signal = "bear"
+                spy_label = f"📉 空头（SPY ${curr:,.2f}，5日 {chg5:+.1f}%，跌破MA20/MA50）"
+            else:
+                spy_signal = "neutral"
+                spy_label = f"📊 震荡（SPY ${curr:,.2f}，5日 {chg5:+.1f}%）"
+    except Exception:
+        pass
+
+    sections.append("━━━━━━━━━━━━━━━━━━")
+    sections.append("【一】大盘状态")
+    sections.append("━━━━━━━━━━━━━━━━━━")
+    sections.append(spy_label)
+    if spy_signal == "bear":
+        sections.append("⚠️ 大盘空头：今日禁止开新仓，保持观望")
+    elif spy_signal == "neutral":
+        sections.append("⚡ 大盘震荡：控制仓位，优先A级信号")
+    else:
+        sections.append("✅ 大盘多头：可按信号评级操作")
+
+    # ─── 模块二：动态池 Top5 ──────────────────────────────────
+    sections.append("")
+    sections.append("━━━━━━━━━━━━━━━━━━")
+    sections.append("【二】Top5 强势信号")
+    sections.append("━━━━━━━━━━━━━━━━━━")
+    pool_file = _TREND_FILE.parent / "stock_pool_dynamic.json"
+    try:
+        if pool_file.exists():
+            with open(pool_file, "r", encoding="utf-8") as f:
+                pool_data = json.load(f)
+            top = pool_data.get("top_30", [])[:5]
+            updated = pool_data.get("updated", "?")
+            regime_cn = pool_data.get("regime_cn", "")
+            sections.append(f"市场状态：{regime_cn}（数据 {updated}）")
+            sections.append("")
+            if top:
+                for i, t in enumerate(top):
+                    sym = t.get("symbol", "?")
+                    score = t.get("score", 0)
+                    chg = t.get("change_pct_5d", 0)
+                    rsi = t.get("rsi", 0)
+                    adx = t.get("adx", 0)
+                    grade = "A" if score >= 75 else "B" if score >= 60 else "C"
+                    sections.append(f"  #{i+1} {sym:<6} {grade}级{score}分 | 5日{chg:+.1f}% RSI={rsi:.0f} ADX={adx:.0f}")
+            else:
+                sections.append("  暂无数据，发送「7」触发更新")
+        else:
+            sections.append("  动态池尚未生成，发送「7」触发更新")
+    except Exception as e:
+        sections.append(f"  读取失败：{e}")
+
+    # ─── 模块三：持仓风控 ─────────────────────────────────────
+    sections.append("")
+    sections.append("━━━━━━━━━━━━━━━━━━")
+    sections.append("【三】持仓风控")
+    sections.append("━━━━━━━━━━━━━━━━━━")
+    pf = _load_portfolio()
+    positions = pf.get("positions", [])
+    NEAR_SL_PCT = 0.03
+
+    if not positions:
+        sections.append("  📭 当前无持仓")
+        has_alert = False
+    else:
+        has_alert = False
+        for pos in positions:
+            sym = pos["symbol"]
+            entry = pos["entry_price"]
+            shares = pos["shares"]
+            sl = pos.get("stop_loss", 0)
+            tp = pos.get("take_profit", 0)
+            current = _get_current_price(sym)
+            is_short = pos.get("direction", "LONG") == "SHORT"
+            pnl = ((entry - current) if is_short else (current - entry)) * shares
+            pnl_pct = pnl / (entry * shares) * 100 if entry > 0 else 0
+
+            alert_icon = "✅"
+            alert_msgs = []
+            if current > 0:
+                if not is_short:
+                    if sl > 0 and current <= sl:
+                        alert_icon = "🔴"
+                        alert_msgs.append(f"触及止损 ${sl:.2f}")
+                        has_alert = True
+                    elif sl > 0 and current <= sl * (1 + NEAR_SL_PCT):
+                        alert_icon = "⚠️"
+                        alert_msgs.append(f"接近止损 ${sl:.2f}（距{(current-sl)/current*100:.1f}%）")
+                        has_alert = True
+                    if tp > 0 and current >= tp:
+                        alert_icon = "🟢"
+                        alert_msgs.append(f"触及止盈 ${tp:.2f}")
+                        has_alert = True
+
+            alert_suffix = " → " + " | ".join(alert_msgs) if alert_msgs else ""
+            sections.append(f"  {alert_icon} {sym} {shares}股 | 现价 ${current:,.2f} | 盈亏 ${pnl:+,.0f}（{pnl_pct:+.1f}%）{alert_suffix}")
+
+    # ─── 模块四：今日建议 ─────────────────────────────────────
+    sections.append("")
+    sections.append("━━━━━━━━━━━━━━━━━━")
+    sections.append("【四】今日建议")
+    sections.append("━━━━━━━━━━━━━━━━━━")
+
+    advice_lines = []
+    if spy_signal == "bear":
+        advice_lines.append("🚫 大盘空头 → 今日禁止开仓，管好现有止损")
+    elif spy_signal == "neutral":
+        advice_lines.append("⚡ 震荡市 → 只做 A 级信号，止损收紧 3%")
+    else:
+        advice_lines.append("✅ 多头市 → 可正常操作，优先 Top 信号")
+
+    if has_alert:
+        advice_lines.append("🚨 持仓有警报 → 回复「8」查看详细风控报告")
+
+    # Top 候选
+    try:
+        if pool_file.exists():
+            with open(pool_file, "r", encoding="utf-8") as f:
+                pd2 = json.load(f)
+            top2 = pd2.get("top_30", [])
+            a_grade = [t for t in top2 if t.get("score", 0) >= 75][:3]
+            if a_grade and spy_signal != "bear":
+                syms = "、".join([t["symbol"] for t in a_grade])
+                advice_lines.append(f"💡 候选：{syms}（A级，输入代码查看详细分析）")
+    except Exception:
+        pass
+
+    advice_lines.append("💬 回复「8」监控 | 「6」发现强势股 | 代码查分析")
+    sections.extend(advice_lines)
+
+    report = "\n".join(sections)
+    return {
+        "formatted_report": report,
+        "status": "OK",
+        "spy_signal": spy_signal,
+        "has_alert": has_alert,
     }
 
 
