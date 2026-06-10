@@ -1733,9 +1733,10 @@ def build_formatted_report(fields: dict, holdings: list = None, total_capital: f
                 risk_amount = acc * 0.02
                 shares = int(risk_amount / dist_a)
                 pos_lines.append(f"  ${acc/1000:.0f}K 账户：{shares} 股（风险 {currency}{risk_amount:.0f}）")
+            direction_label = "做空参考" if is_short else "做多参考"
             position_text = f"""
 ━━━━━━━━━━━━━━━━━━
-💰 仓位管理（单笔风险≤2%，基于方案A止损 {dist_a:.2f} {currency}，仅供" + ("做空参考" if is_short else "做多参考") + "）
+💰 仓位管理（单笔风险≤2%，基于方案A止损 {dist_a:.2f} {currency}，仅供{direction_label}）
 ━━━━━━━━━━━━━━━━━━
 """ + "\n".join(pos_lines) + f"\n  ATR(14)：{atr:.2f} {currency}"
 
