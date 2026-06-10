@@ -316,6 +316,12 @@ def fetch_yf_data(symbol: str, period: str = "6mo"):
             info = ticker.info
             data = ticker.history(period=period)
 
+            # V2.2.16: 清除不完整的最后一行（Yahoo Finance 在未收盘时 Close=NaN）
+            before = len(data)
+            data = data.dropna(subset=['Close']).copy()
+            if len(data) < before:
+                pass  # 静默丢弃不完整行
+
             if data.empty:
                 # 数据为空但没报错，检查是否有过期缓存兜底
                 with _yf_cache_lock:
@@ -1909,8 +1915,24 @@ def analyze_stock_flat(symbol: str = "AAPL", market: str = "us", holdings: str =
         trade_points = detect_trade_points(data, symbol)
         indicators = signal_data["indicators"]
 
-        # V5.25: 大盘环境因子
-        market_trend = get_market_trend(market)
+        # V5.25: 大盘环境因子（NaN 安全）
+        try:
+            market_trend = get_market_trend(market)
+            # NaN 清洗：确保返回的浮点值都是 JSON 安全的
+            for _k in ("index_price", "change_30d", "ma20", "ma50"):
+                _v = market_trend.get(_k, 0)
+                try:
+                    _f = float(_v)
+                    if math.isnan(_f) or math.isinf(_f):
+                        market_trend[_k] = 0.0
+                except Exception:
+                    market_trend[_k] = 0.0
+        except Exception:
+            market_trend = {
+                "trend": "error", "grade": "N/A", "multiplier": 1.0,
+                "name": mkt_name, "index_price": 0.0, "change_30d": 0.0,
+                "ma20": 0.0, "ma50": 0.0,
+            }
 
         current_price = round(data['Close'].iloc[-1], 2)
         prev_close = round(data['Close'].iloc[-2], 2) if len(data) > 1 else current_price
