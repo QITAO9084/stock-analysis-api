@@ -2479,7 +2479,7 @@ def _batch_analyze_one(symbol: str, market: str, market_trend: dict):
 
 
 
-@app.get("/batch/analyze", response_model=BatchAnalyzeResponse)
+@app.get("/batch/analyze")
 def batch_analyze(symbols: str = "", market: str = "us", pool: str = "default", force_refresh: bool = False):
     """
     V5.40: 批量分析接口 — 一次扫多只股票，返回排名汇总表（含趋势追踪📈📉）
