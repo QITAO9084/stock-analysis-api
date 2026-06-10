@@ -1,0 +1,244 @@
+{
+  "openapi": "3.0.2",
+  "info": {
+    "title": "Stock Analysis API",
+    "version": "5.40.4",
+    "description": "US Stock Analysis API"
+  },
+  "servers": [
+    {
+      "url": "https://qtapi.space"
+    }
+  ],
+  "paths": {
+    "/daily-brief": {
+      "get": {
+        "summary": "Daily Brief",
+        "description": "盘前早报 — 四大模块合并输出（Coze 定时任务每日调用）\n\n模块：\n1. SPY 大盘状态（多空判断）\n2. 动态池 Top5 信号速览\n3. 持仓风控检查（同 /portfolio/monitor）\n4. 今日操作建议（一句话）",
+        "operationId": "daily_brief_daily_brief_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/batch/analyze": {
+      "get": {
+        "summary": "Batch Analyze",
+        "description": "V5.40: 批量分析接口 — 一次扫多只股票，返回排名汇总表（含趋势追踪📈📉）\nV2.2.11: force_refresh=True 时跳过 120 秒冷却期，强制触发池刷新\n\n对每只股票跑完整 analyze2 逻辑（含信号评级+凯利仓位），\n按评分排名，输出紧凑汇总表。一次 Coze 工具调用扫 5-6 只。\nV5.37: 自动对比上次扫描评分，标记趋势回升/走弱/延续。\nV5.40: 支持 pool=dynamic 读取动态池（由 discover_pool.py 生成）。\n\n- **symbols**: 股票代码，逗号分隔（如 AAPL,MSFT,NVDA,AMD）\n             为空且 pool=\"default\" 时使用内置默认池（15只）\n- **market**: 市场（us/hk/cn），默认美股\n- **pool**: \"default\"=固定池, \"dynamic\"=读取 stock_pool_dynamic.json",
+        "operationId": "batch_analyze_batch_analyze_get",
+        "parameters": [
+          {
+            "name": "symbols",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Symbols"
+            }
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "us",
+              "title": "Market"
+            }
+          },
+          {
+            "name": "pool",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "default",
+              "title": "Pool"
+            }
+          },
+          {
+            "name": "force_refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Force Refresh"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stock/analyze2": {
+      "get": {
+        "summary": "Analyze Stock Flat",
+        "description": "扁平化股票分析接口（专为 Coze 插件优化）\n\n所有字段扁平返回，避免嵌套 Object/Array 导致 Coze 解析问题。\nCoze 插件只需配置 String 和 Number 类型的输出参数。\n\n- **symbol**: 股票代码（如 AAPL, 00700.HK）\n- **market**: 市场（us/hk/cn）\n- **holdings**: 持仓信息（可选），JSON 格式: [{\"symbol\":\"TSLA\",\"shares\":10,\"cost\":420.5}]\n- **total_capital**: 总资金（默认 $6,400 ~ 5万HKD），用于仓位计算",
+        "operationId": "analyze_stock_flat_stock_analyze2_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "AAPL",
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "us",
+              "title": "Market"
+            }
+          },
+          {
+            "name": "holdings",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Holdings"
+            }
+          },
+          {
+            "name": "total_capital",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 6400,
+              "title": "Total Capital"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/portfolio/status": {
+      "get": {
+        "summary": "Portfolio Status",
+        "description": "持仓状态 — 实时拉取当前价格计算浮盈/浮亏 + 止损/止盈状态",
+        "operationId": "portfolio_status_portfolio_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/portfolio/monitor": {
+      "get": {
+        "summary": "Portfolio Monitor",
+        "description": "持仓监控 — 实时检查止损/止盈/风险警报\n\nCoze 定时调用此端点，实现自动化持仓风险监控。\n对每只持仓检查：止损触发 / 止盈触发 / 接近报警。\n\n返回：\n- formatted_report: 格式化警报报告（Coze 可直接展示）\n- status: OK（无警报）/ WARNING（接近线）/ ALERT（已触发）\n- alerts: 结构化警报列表\n- positions: 每只持仓的详细信息",
+        "operationId": "portfolio_monitor_portfolio_monitor_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/portfolio/quick-close": {
+      "get": {
+        "summary": "Portfolio Quick Close",
+        "description": "快速平仓（GET）— 按 symbol 平掉第一条匹配持仓\n\nCoze 直接 GET 调用，无需配置 POST body 参数。\n自动获取当前价，写入交易日志。",
+        "operationId": "portfolio_quick_close_portfolio_quick_close_get",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Symbol"
+            }
+          },
+          {
+            "name": "exit_price",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 0,
+              "title": "Exit Price"
+            }
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "Coze quick close",
+              "title": "Reason"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
