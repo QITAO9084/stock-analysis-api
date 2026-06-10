@@ -372,9 +372,14 @@ def _calc_indicators(df, regime: str = "neutral") -> dict:
     返回同 fetch_batch 的 dict 结构。
     regime: 市场状态，用于动态评分
     """
-    closes = [float(x) for x in df["Close"].tolist()]
-    highs = [float(x) for x in df["High"].tolist()]
-    lows = [float(x) for x in df["Low"].tolist()]
+    # V2.2.16: 清洗 NaN（Yahoo Finance 在未收盘时最后一行 Close=NaN）
+    df_clean = df.dropna(subset=["Close"]).copy()
+    if len(df_clean) < 2:
+        return None
+
+    closes = [float(x) for x in df_clean["Close"].tolist()]
+    highs = [float(x) for x in df_clean["High"].tolist()]
+    lows = [float(x) for x in df_clean["Low"].tolist()]
 
     n = len(closes)
     if n < 2:
@@ -457,6 +462,11 @@ def fetch_batch(symbols: list, period: str = "1mo", max_retries: int = 2,
                     df = data[sym]
 
                 if df is None or len(df) < 2:
+                    continue
+
+                # V2.2.16: 清洗 NaN（Yahoo Finance 未收盘时 Close=NaN）
+                df = df.dropna(subset=["Close"]).copy()
+                if len(df) < 2:
                     continue
 
                 # V2.1: 传入 regime 参数
