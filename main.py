@@ -4962,12 +4962,24 @@ def get_market_trend(market: str) -> dict:
             ma20 = float(data["Close"].rolling(20).mean().iloc[-1])
             ma50 = float(data["Close"].rolling(50).mean().iloc[-1]) if len(data) >= 50 else ma20
 
+            # NaN 安全处理
+            import math as _m
+            if _m.isnan(current_close) or _m.isinf(current_close):
+                current_close = 0
+            if _m.isnan(ma20) or _m.isinf(ma20):
+                ma20 = current_close
+            if _m.isnan(ma50) or _m.isinf(ma50):
+                ma50 = ma20
+
             # 30日涨跌幅
             if len(data) >= 30:
                 close_30d_ago = float(data["Close"].iloc[-30])
-                change_30d = (current_close - close_30d_ago) / close_30d_ago * 100
+                if _m.isnan(close_30d_ago) or _m.isinf(close_30d_ago) or close_30d_ago == 0:
+                    change_30d = 0.0
+                else:
+                    change_30d = (current_close - close_30d_ago) / close_30d_ago * 100
             else:
-                change_30d = 0
+                change_30d = 0.0
 
             # 趋势判定
             above_ma20 = current_close > ma20
@@ -5008,8 +5020,17 @@ def get_market_trend(market: str) -> dict:
         except Exception:
             continue  # 失败→重试
 
-    # 3 次全失败，优雅降级
-    return {"trend": "error", "grade": "N/A", "multiplier": 1.0, "name": name, "index_price": 0, "change_30d": 0}
+    # 3 次全失败，优雅降级（NaN 安全）
+    return {
+        "trend": "error",
+        "grade": "N/A",
+        "multiplier": 1.0,
+        "name": name,
+        "index_price": 0.0,
+        "change_30d": 0.0,
+        "ma20": 0.0,
+        "ma50": 0.0,
+    }
 
 
 def run_backtest(data, symbol: str, days: int = 60) -> dict:
