@@ -142,7 +142,7 @@ import threading
 app = FastAPI(
     title="Stock Analysis API",
     description="股票/加密货币分析API - V5（含买卖点检测、缓存重试限速）",
-    version="5.40.3"
+    version="5.40.5"
 )
 
 # Coze兼容：强制 OpenAPI 3.0.3 + 空schema补全为object类型
@@ -181,6 +181,37 @@ def custom_openapi():
     return app.openapi_schema
 
 app.openapi = custom_openapi
+
+# Coze兼容：精简版 OpenAPI（只含核心端点，无 $ref/anyOf/oneOf）
+@app.get("/openapi_coze.json", include_in_schema=False)
+async def openapi_coze():
+    """返回精简版 OpenAPI 3.0.2，仅含 6 个核心 GET 端点"""
+    import copy
+    full = app.openapi()
+    core_endpoints = [
+        "/daily-brief", "/batch/analyze", "/stock/analyze2",
+        "/portfolio/status", "/portfolio/monitor", "/portfolio/quick-close",
+    ]
+    lite = {
+        "openapi": "3.0.2",
+        "info": {"title": "Stock Analysis API", "version": "5.40.4", "description": "US Stock Analysis — Coze Lite"},
+        "servers": [{"url": "https://qtapi.space"}],
+        "paths": {}
+    }
+    for ep in core_endpoints:
+        if ep in full.get("paths", {}):
+            ep_data = copy.deepcopy(full["paths"][ep])
+            for op in ep_data.values():
+                # 移除 422 错误响应
+                op["responses"] = {k: v for k, v in op.get("responses", {}).items() if k != "422"}
+                # 确保所有 200 响应是 object
+                for resp in op.get("responses", {}).values():
+                    ct = resp.get("content", {}).get("application/json", {})
+                    schema = ct.get("schema", {})
+                    if not schema or "$ref" in schema:
+                        ct["schema"] = {"type": "object"}
+            lite["paths"][ep] = ep_data
+    return lite
 
 # Coze兼容：/openapi.json/xxx → /xxx 路径重写
 class CozePathRewriteMiddleware(BaseHTTPMiddleware):
